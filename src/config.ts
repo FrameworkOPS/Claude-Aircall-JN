@@ -72,6 +72,19 @@ const ConfigSchema = z.object({
 
 export type Config = z.infer<typeof ConfigSchema>;
 
+/**
+ * Minimal config needed to connect to the database. The migration step only
+ * touches Postgres, so it validates ONLY these vars — it must not fail just
+ * because the Aircall/JobNimbus/Slack vars aren't set yet.
+ */
+const MigrationConfigSchema = ConfigSchema.pick({
+  DATABASE_URL: true,
+  DATABASE_SSL: true,
+  LOG_LEVEL: true,
+});
+
+export type MigrationConfig = z.infer<typeof MigrationConfigSchema>;
+
 let cached: Config | undefined;
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
@@ -89,6 +102,21 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   }
   cached = parsed.data;
   return cached;
+}
+
+/**
+ * Validate only the database-related vars. Used by the migration entrypoint so
+ * that running migrations does not require the full app/integration config.
+ */
+export function loadMigrationConfig(env: NodeJS.ProcessEnv = process.env): MigrationConfig {
+  const parsed = MigrationConfigSchema.safeParse(env);
+  if (!parsed.success) {
+    const issues = parsed.error.issues
+      .map((i) => `  - ${i.path.join('.') || '(root)'}: ${i.message}`)
+      .join('\n');
+    throw new Error(`Invalid migration configuration:\n${issues}`);
+  }
+  return parsed.data;
 }
 
 /** Test helper to reset the memoised config. */

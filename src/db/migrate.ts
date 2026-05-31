@@ -1,6 +1,6 @@
 import { readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
-import { loadConfig } from '../config';
+import { loadMigrationConfig } from '../config';
 import { createLogger } from '../logger';
 import { getPool, closePool } from './pool';
 
@@ -9,7 +9,7 @@ import { getPool, closePool } from './pool';
  * ./migrations that has not been recorded in schema_migrations, in name order.
  */
 async function migrate(): Promise<void> {
-  const config = loadConfig();
+  const config = loadMigrationConfig();
   const logger = createLogger(config.LOG_LEVEL);
   const pool = getPool(config);
 

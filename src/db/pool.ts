@@ -3,7 +3,11 @@ import type { Config } from '../config';
 
 let pool: Pool | undefined;
 
-export function getPool(config: Config): Pool {
+// Only the DB connection fields are needed here, so accept any config (full app
+// config or the minimal migration config) that provides them.
+type PoolConfig = Pick<Config, 'DATABASE_URL' | 'DATABASE_SSL'>;
+
+export function getPool(config: PoolConfig): Pool {
   if (pool) return pool;
   pool = new Pool({
     connectionString: config.DATABASE_URL,
