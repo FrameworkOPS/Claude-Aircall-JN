@@ -10,7 +10,7 @@ idempotency, retries with backoff, rate limiting, and structured logging.
 | Flow | Trigger | Action |
 | --- | --- | --- |
 | **1. Contact sync + dedup** | Aircall `contact.created` / `contact.updated` | Match JobNimbus contact by normalized phone → **update** if one match, **create** if none, **flag `DUPLICATE_CONFLICT`** (no write) if many. |
-| **2. Call transcript + recording → JobNimbus** | Aircall `transcription.created` (or poll after `call.ended`) | Match contact by the customer's phone, find the related **job** (fallback to contact), attach a machine-tagged **note** with the transcript, and **upload the recording** as a file. |
+| **2. Call recording → JobNimbus** | Aircall `call.ended` | Match contact by the customer's phone, find the related **job** (fallback to contact), **upload the recording** as a file, and add a short `[Aircall Recording]` context note. |
 | **3. Signed-estimate Slack shoutout** | JobNimbus webhook when an estimate is signed | Post a sales shoutout (rep, customer/job, signed $ amount) to a configured Slack channel. |
 
 ### What "merge" means here
@@ -49,9 +49,9 @@ Module layout: `clients/{aircall,jobnimbus,slack}`, `flows/`, `lib/phone`,
 
 ## Prerequisites
 
-- **Aircall AI Assist add-on** — *required*. Without it there are no
-  transcripts (neither the `transcription.created` webhook nor the
-  `GET /v1/calls/:id/transcription` endpoint return anything).
+- Call **recording** must be enabled on the relevant Aircall numbers/lines (so a
+  recording URL is present on `call.ended`). Transcripts are **not** used, so the
+  Aircall AI Assist add-on is **not** required.
 - Node.js 20+, a PostgreSQL database (Railway Postgres plugin).
 
 ## Setup
@@ -64,10 +64,10 @@ Aircall Dashboard → **Integrations / API Keys** → create an API key. You get
 ### 2. Register the Aircall webhook
 Aircall Dashboard → create a Webhook integration pointing at
 `https://<your-railway-domain>/webhooks/aircall`. Subscribe to:
-`contact.created`, `contact.updated`, `transcription.created`, and `call.ended`
-(the last only needed if you use poll mode). Copy the webhook **token** shown on
-creation into `AIRCALL_WEBHOOK_SECRET`. To additionally verify the
-`X-Aircall-Signature` HMAC-SHA1 header, set `AIRCALL_VERIFY_HMAC=true`.
+`contact.created`, `contact.updated`, and `call.ended` (the recording flow keys
+off `call.ended`, which fires once the recording is available). Copy the webhook
+**token** shown on creation into `AIRCALL_WEBHOOK_SECRET`. To additionally
+verify the `X-Aircall-Signature` HMAC-SHA1 header, set `AIRCALL_VERIFY_HMAC=true`.
 
 ### 3. JobNimbus API key
 JobNimbus → **Settings → API** → create an API key → `JOBNIMBUS_API_KEY`.
@@ -95,15 +95,14 @@ See `.env.example` for the full annotated list. Key ones:
 | `AIRCALL_API_ID` / `AIRCALL_API_TOKEN` | — | Basic Auth |
 | `AIRCALL_WEBHOOK_SECRET` | — | webhook body token |
 | `AIRCALL_VERIFY_HMAC` | `false` | also check `X-Aircall-Signature` |
-| `TRANSCRIPT_DELIVERY` | `event` | `event` \| `poll` \| `both` |
-| `TRANSCRIPT_POLL_SCHEDULE_MIN` | `1,3,5,10` | poll-mode backoff (minutes) |
+| `RECORDING_POLL_SCHEDULE_MIN` | `1,3,5,10` | wait/retry minutes for recording availability |
 | `JOBNIMBUS_API_KEY` | — | Settings → API |
 | `JOBNIMBUS_WEBHOOK_SECRET` | — | shared secret for estimate webhook |
 | `ATTACH_TARGET` | `job` | `job` (fallback contact) \| `contact` \| `both` |
 | `ESTIMATE_SIGNED_STATUSES` | `signed,complete,completed` | counts as fully signed |
 | `SLACK_BOT_TOKEN` / `SLACK_CHANNEL_ID` | — | client workspace |
 | `DEFAULT_PHONE_REGION` | `US` | for numbers without a country code |
-| `CREATE_CONTACT_FROM_TRANSCRIPT` | `false` | create a contact when none matches |
+| `CREATE_CONTACT_FROM_CALL` | `false` | create a contact when none matches |
 | `ENABLE_MERGE_ENDPOINT` | `false` | reserved; no JN merge API today |
 | `MAX_RETRIES` | `6` | per-job retry cap before dead-letter |
 | `RUN_WORKER_IN_WEB` | `true` | run worker in web process |
@@ -149,7 +148,7 @@ npm run typecheck
 
 - Two-way sync JobNimbus → Aircall (this is one-directional).
 - Historical backfill of past calls/transcripts. A backfill would hook in by
-  enqueuing `transcript` jobs (one per historical `call_id`) via `Repo.enqueueJob`.
+  enqueuing `recording` jobs (one per historical `call_id`) via `Repo.enqueueJob`.
 - Any UI.
 
 See `FINDINGS.md` for the confirmed API facts and the open questions/risks that

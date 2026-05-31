@@ -11,8 +11,7 @@ export function testConfig(overrides: Partial<Config> = {}): Config {
     AIRCALL_WEBHOOK_SECRET: 'secret',
     AIRCALL_VERIFY_HMAC: false,
     AIRCALL_RATE_LIMIT_PER_MIN: 60,
-    TRANSCRIPT_DELIVERY: 'event',
-    TRANSCRIPT_POLL_SCHEDULE_MIN: [1, 3, 5, 10],
+    RECORDING_POLL_SCHEDULE_MIN: [1, 3, 5, 10],
     JOBNIMBUS_API_KEY: 'jn',
     JOBNIMBUS_BASE_URL: 'https://app.jobnimbus.com/api1',
     JOBNIMBUS_WEBHOOK_SECRET: 'jnsecret',
@@ -24,7 +23,7 @@ export function testConfig(overrides: Partial<Config> = {}): Config {
     DEFAULT_PHONE_REGION: 'US',
     DATABASE_URL: 'postgres://localhost/test',
     DATABASE_SSL: 'disable',
-    CREATE_CONTACT_FROM_TRANSCRIPT: false,
+    CREATE_CONTACT_FROM_CALL: false,
     ENABLE_MERGE_ENDPOINT: false,
     MAX_RETRIES: 6,
     PORT: 3000,
@@ -47,7 +46,6 @@ interface TestMocks {
   };
   aircall: {
     getCall: jest.Mock;
-    getTranscription: jest.Mock;
     downloadRecording: jest.Mock;
   };
   jobnimbus: {
@@ -81,7 +79,6 @@ export function buildTestCtx(overrides: Partial<Config> = {}): {
 
   const aircall = {
     getCall: jest.fn(),
-    getTranscription: jest.fn(),
     downloadRecording: jest.fn(),
   };
 

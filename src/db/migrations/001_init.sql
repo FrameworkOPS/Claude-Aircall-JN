@@ -16,7 +16,7 @@ CREATE INDEX IF NOT EXISTS idx_webhook_events_received_at ON webhook_events (rec
 -- DB-backed job queue with retry/backoff and dead-lettering.
 CREATE TABLE IF NOT EXISTS jobs (
   id           BIGSERIAL PRIMARY KEY,
-  type         TEXT        NOT NULL,           -- 'contact_sync' | 'transcript' | 'estimate_shoutout'
+  type         TEXT        NOT NULL,           -- 'contact_sync' | 'recording' | 'estimate_shoutout'
   payload      JSONB       NOT NULL,
   status       TEXT        NOT NULL DEFAULT 'pending', -- pending|processing|done|dead
   attempts     INT         NOT NULL DEFAULT 0,
@@ -41,14 +41,13 @@ CREATE TABLE IF NOT EXISTS contact_map (
 CREATE INDEX IF NOT EXISTS idx_contact_map_phone ON contact_map (normalized_phone);
 CREATE INDEX IF NOT EXISTS idx_contact_map_jnid  ON contact_map (jobnimbus_jnid);
 
--- Idempotency for transcript/recording posting (Flow 2). One row per call.
+-- Idempotency for recording upload (Flow 2). One row per call.
 CREATE TABLE IF NOT EXISTS processed_calls (
   aircall_call_id      TEXT        PRIMARY KEY,
   normalized_phone     TEXT,
-  jobnimbus_jnid       TEXT,                    -- contact or job the note landed on
+  jobnimbus_jnid       TEXT,                    -- contact or job the recording landed on
   jobnimbus_activity_id TEXT,
   jobnimbus_file_id    TEXT,
-  transcript_posted_at TIMESTAMPTZ,
   recording_uploaded_at TIMESTAMPTZ,
   outcome              TEXT,                    -- 'posted' | 'no_contact_match' | 'duplicate_conflict'
   created_at           TIMESTAMPTZ NOT NULL DEFAULT now()

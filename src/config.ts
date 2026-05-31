@@ -30,10 +30,9 @@ const ConfigSchema = z.object({
   AIRCALL_WEBHOOK_SECRET: z.string().min(1),
   AIRCALL_VERIFY_HMAC: bool('false'),
   AIRCALL_RATE_LIMIT_PER_MIN: z.coerce.number().int().positive().default(60),
-  TRANSCRIPT_DELIVERY: z.enum(['event', 'poll', 'both']).default('event'),
-  TRANSCRIPT_POLL_SCHEDULE_MIN: csv('1,3,5,10').pipe(
-    z.array(z.coerce.number().positive()),
-  ),
+  // Minutes (comma separated) to wait/retry for a recording to become available
+  // after call.ended before giving up.
+  RECORDING_POLL_SCHEDULE_MIN: csv('1,3,5,10').pipe(z.array(z.coerce.number().positive())),
 
   // JobNimbus
   JOBNIMBUS_API_KEY: z.string().min(1),
@@ -57,7 +56,7 @@ const ConfigSchema = z.object({
   DATABASE_SSL: z.enum(['disable', 'require']).default('disable'),
 
   // Flags
-  CREATE_CONTACT_FROM_TRANSCRIPT: bool('false'),
+  CREATE_CONTACT_FROM_CALL: bool('false'),
   ENABLE_MERGE_ENDPOINT: bool('false'),
   MAX_RETRIES: z.coerce.number().int().positive().default(6),
 

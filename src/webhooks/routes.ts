@@ -2,7 +2,7 @@ import type { FastifyInstance, FastifyRequest } from 'fastify';
 import type { AppContext } from '../context';
 import { AircallWebhookSchema, JobNimbusEstimateWebhookSchema, extractEstimate } from './schema';
 import { verifyAircall, safeEqual } from '../lib/verify';
-import type { TranscriptJobPayload } from '../flows/transcript';
+import type { RecordingJobPayload } from '../flows/recording';
 import type { AircallContactPayload } from '../flows/contactSync';
 
 interface RawBodyRequest extends FastifyRequest {
@@ -97,26 +97,14 @@ async function routeAircallEvent(
   const callId = data.id as number | string | undefined;
   if (!callId) return;
 
-  if (event === 'transcription.created' && config.TRANSCRIPT_DELIVERY !== 'poll') {
-    const payload: TranscriptJobPayload = { call_id: callId, source: 'event' };
+  // call.ended fires once call data (including the recording) is gathered.
+  if (event === 'call.ended') {
+    const payload: RecordingJobPayload = { call_id: callId };
     await repo.enqueueJob({
-      type: 'transcript',
+      type: 'recording',
       payload: payload as unknown as Record<string, unknown>,
-      dedupeKey: `transcript:${callId}`,
+      dedupeKey: `recording:${callId}`,
       maxAttempts: config.MAX_RETRIES,
-    });
-    return;
-  }
-
-  if (event === 'call.ended' && config.TRANSCRIPT_DELIVERY !== 'event') {
-    const firstDelayMin = config.TRANSCRIPT_POLL_SCHEDULE_MIN[0] ?? 1;
-    const payload: TranscriptJobPayload = { call_id: callId, source: 'poll' };
-    await repo.enqueueJob({
-      type: 'transcript',
-      payload: payload as unknown as Record<string, unknown>,
-      dedupeKey: `transcript:${callId}`,
-      maxAttempts: config.MAX_RETRIES,
-      runAfter: new Date(Date.now() + firstDelayMin * 60_000),
     });
     return;
   }

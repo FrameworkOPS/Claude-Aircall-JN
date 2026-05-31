@@ -2,7 +2,7 @@ import type { AppContext } from '../context';
 import { NotReadyError } from '../context';
 import type { Job } from '../db/repo';
 import { syncContact, type AircallContactPayload } from '../flows/contactSync';
-import { processTranscript, type TranscriptJobPayload } from '../flows/transcript';
+import { processRecording, type RecordingJobPayload } from '../flows/recording';
 import { postEstimateShoutout, type EstimateShoutoutPayload } from '../flows/estimateShoutout';
 
 /**
@@ -59,7 +59,7 @@ export class Worker {
       log.info({ latency_ms: Date.now() - started }, 'job done');
     } catch (err) {
       if (err instanceof NotReadyError) {
-        const schedule = config.TRANSCRIPT_POLL_SCHEDULE_MIN;
+        const schedule = config.RECORDING_POLL_SCHEDULE_MIN;
         const idx = job.attempts - 1;
         if (idx < schedule.length) {
           const delayMs = (schedule[idx] ?? 1) * 60_000;
@@ -85,8 +85,8 @@ export class Worker {
     switch (job.type) {
       case 'contact_sync':
         return syncContact(this.ctx, job.payload as unknown as AircallContactPayload);
-      case 'transcript':
-        return processTranscript(this.ctx, job.payload as unknown as TranscriptJobPayload);
+      case 'recording':
+        return processRecording(this.ctx, job.payload as unknown as RecordingJobPayload);
       case 'estimate_shoutout':
         return postEstimateShoutout(this.ctx, job.payload as unknown as EstimateShoutoutPayload);
       default:

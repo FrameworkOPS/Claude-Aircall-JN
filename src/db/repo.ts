@@ -1,6 +1,6 @@
 import type { Pool } from 'pg';
 
-export type JobType = 'contact_sync' | 'transcript' | 'estimate_shoutout';
+export type JobType = 'contact_sync' | 'recording' | 'estimate_shoutout';
 
 export interface Job {
   id: string;
@@ -25,7 +25,6 @@ export interface ProcessedCall {
   jobnimbus_jnid: string | null;
   jobnimbus_activity_id: string | null;
   jobnimbus_file_id: string | null;
-  transcript_posted_at: Date | null;
   recording_uploaded_at: Date | null;
   outcome: string | null;
 }
@@ -167,24 +166,21 @@ export class Repo {
     jobnimbus_jnid: string | null;
     jobnimbus_activity_id: string | null;
     jobnimbus_file_id: string | null;
-    transcript_posted: boolean;
     recording_uploaded: boolean;
     outcome: string;
   }): Promise<void> {
     await this.pool.query(
       `INSERT INTO processed_calls (
          aircall_call_id, normalized_phone, jobnimbus_jnid, jobnimbus_activity_id,
-         jobnimbus_file_id, transcript_posted_at, recording_uploaded_at, outcome)
+         jobnimbus_file_id, recording_uploaded_at, outcome)
        VALUES ($1,$2,$3,$4,$5,
                CASE WHEN $6 THEN now() END,
-               CASE WHEN $7 THEN now() END,
-               $8)
+               $7)
        ON CONFLICT (aircall_call_id) DO UPDATE SET
          normalized_phone = EXCLUDED.normalized_phone,
          jobnimbus_jnid = COALESCE(EXCLUDED.jobnimbus_jnid, processed_calls.jobnimbus_jnid),
          jobnimbus_activity_id = COALESCE(EXCLUDED.jobnimbus_activity_id, processed_calls.jobnimbus_activity_id),
          jobnimbus_file_id = COALESCE(EXCLUDED.jobnimbus_file_id, processed_calls.jobnimbus_file_id),
-         transcript_posted_at = COALESCE(EXCLUDED.transcript_posted_at, processed_calls.transcript_posted_at),
          recording_uploaded_at = COALESCE(EXCLUDED.recording_uploaded_at, processed_calls.recording_uploaded_at),
          outcome = EXCLUDED.outcome`,
       [
@@ -193,7 +189,6 @@ export class Repo {
         p.jobnimbus_jnid,
         p.jobnimbus_activity_id,
         p.jobnimbus_file_id,
-        p.transcript_posted,
         p.recording_uploaded,
         p.outcome,
       ],

@@ -45,19 +45,6 @@ export class AircallClient {
   }
 
   /**
-   * GET /calls/:id/transcription — requires the AI Assist add-on.
-   * Returns the raw transcription object, or null when not ready yet (404).
-   */
-  async getTranscription(callId: number | string): Promise<unknown | null> {
-    try {
-      return await this.http.json<unknown>({ path: `/calls/${callId}/transcription` });
-    } catch (err) {
-      if (err instanceof HttpError && err.isNotFound) return null;
-      throw err;
-    }
-  }
-
-  /**
    * Download a call recording. The recording URL lives on a different host than
    * the API base, so this is a direct authenticated GET with light retries.
    */

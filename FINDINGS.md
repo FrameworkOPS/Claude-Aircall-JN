@@ -6,6 +6,12 @@ below were confirmed from Aircall/JobNimbus documentation surfaced via search.
 **Anything I could not confirm verbatim is called out under "Open questions /
 risks" — the code is written defensively around those.**
 
+> **Updated requirement:** the client wants **call recordings**, not
+> transcripts. Flow 2 keys off `call.ended` and uploads the recording file to
+> the matching JobNimbus job. The transcription endpoint / `transcription.created`
+> event and the **AI Assist add-on are therefore NOT used or required.** The
+> transcription notes below are retained for reference only.
+
 ---
 
 ## Aircall API
@@ -139,11 +145,14 @@ blocker — safe to build.
 
 These were added after Step 0. Confirmed surfaces:
 
-### Call recording → JobNimbus job
-- **Recording URL**: present on the call object (`data.recording`) on
-  `call.ended` and via `GET /v1/calls/:id`. The transcript flow fetches the call
-  by id to get a consistent recording URL + metadata (direction, duration,
-  agent, `raw_digits`) rather than trusting the lighter webhook payload.
+### Call recording → JobNimbus job (the active Flow 2)
+- **Trigger**: `call.ended`, which fires once all call data — including the
+  recording file — has been gathered (~30s after the call). The worker fetches
+  `GET /v1/calls/:id` to read the authoritative recording URL + metadata
+  (direction, duration, agent, `raw_digits`); if the recording isn't present
+  yet it defers and retries per `RECORDING_POLL_SCHEDULE_MIN`.
+- **Recording URL**: `data.recording` on the call object. Requires call
+  recording to be enabled on the Aircall line. No AI Assist add-on needed.
 - **JobNimbus file upload**: `POST /api1/files` (a.k.a. "Create Attachment").
   Accepts the file plus `related`/`type` linkage (`contact` | `job`) and
   `filename`/`description`. We download the Aircall recording (authenticated
