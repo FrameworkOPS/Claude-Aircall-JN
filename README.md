@@ -1,9 +1,15 @@
 # Aircall ⇄ JobNimbus Integration
 
-A single Node.js/TypeScript service (deployed on Railway) that replaces a
-Zapier flow between **Aircall** and **JobNimbus**, plus a Slack sales shoutout.
-It runs unattended and handles real customer data, so it is built with
-idempotency, retries with backoff, rate limiting, and structured logging.
+[![Deploy on Railway](https://railway.com/button.svg)](https://railway.com/new)
+
+A single Node.js/TypeScript service (deployed on Railway, project name
+**`aircall-jobnimbus`**) that replaces a Zapier flow between **Aircall** and
+**JobNimbus**, plus a Slack sales shoutout. It runs unattended and handles real
+customer data, so it is built with idempotency, retries with backoff, rate
+limiting, and structured logging.
+
+**Deploying?** See **[DEPLOY.md](./DEPLOY.md)** — one-command script
+(`./scripts/deploy.sh`), one-click button, or manual CLI.
 
 ## What it does
 
