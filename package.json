@@ -1,0 +1,44 @@
+{
+  "name": "aircall-jobnimbus-integration",
+  "version": "1.0.0",
+  "description": "Production integration syncing Aircall calls/contacts into JobNimbus (transcripts, recordings, dedup) and posting signed-estimate shoutouts to Slack.",
+  "license": "UNLICENSED",
+  "private": true,
+  "type": "commonjs",
+  "engines": {
+    "node": ">=20"
+  },
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "start": "node dist/index.js",
+    "start:worker": "node dist/worker/index.js",
+    "dev": "tsx watch src/index.ts",
+    "dev:worker": "tsx watch src/worker/index.ts",
+    "migrate": "tsx src/db/migrate.ts",
+    "migrate:prod": "node dist/db/migrate.js",
+    "test": "jest --runInBand",
+    "typecheck": "tsc --noEmit",
+    "lint": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@slack/web-api": "^7.8.0",
+    "fastify": "^4.28.1",
+    "libphonenumber-js": "^1.11.14",
+    "pg": "^8.13.1",
+    "pino": "^9.5.0",
+    "undici": "^6.21.0",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "@types/jest": "^29.5.14",
+    "@types/node": "^20.17.6",
+    "@types/pg": "^8.11.10",
+    "jest": "^29.7.0",
+    "nock": "^13.5.6",
+    "pino-pretty": "^13.0.0",
+    "ts-jest": "^29.2.5",
+    "tsx": "^4.19.2",
+    "typescript": "^5.6.3"
+  }
+}
