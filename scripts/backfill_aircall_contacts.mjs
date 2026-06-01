@@ -73,20 +73,38 @@ console.log(`   unique contact jnids: ${wantedContactIds.size}  (jobs missing pr
 
 console.log('\n3) Scanning JN contacts to pull those primaries (one pass, paginated)…');
 const wantedContacts = [];
+const foundIds = new Set();
 let scannedContacts = 0;
 let from = 0;
-const size = 100;
-while (wantedContacts.length < wantedContactIds.size) {
+// JN's /contacts pagination drops a few records at size=100; size=200 is reliable.
+const size = 200;
+while (foundIds.size < wantedContactIds.size) {
   const res = await jn('/contacts', { size: String(size), from: String(from) });
   const recs = res.results ?? [];
   if (recs.length === 0) break;
   scannedContacts += recs.length;
-  for (const c of recs) if (wantedContactIds.has(c.jnid) && c.is_active !== false) wantedContacts.push(c);
-  process.stdout.write(`   scanned ${scannedContacts}, matched ${wantedContacts.length}/${wantedContactIds.size}\r`);
+  for (const c of recs) if (wantedContactIds.has(c.jnid) && c.is_active !== false) {
+    if (!foundIds.has(c.jnid)) { wantedContacts.push(c); foundIds.add(c.jnid); }
+  }
+  process.stdout.write(`   scanned ${scannedContacts}, matched ${foundIds.size}/${wantedContactIds.size}\r`);
   if (recs.length < size) break;
   from += size;
 }
 process.stdout.write('\n');
+
+// Backstop: any wanted jnid the bulk scan missed -> fetch directly by jnid filter
+// (we've confirmed {term:{jnid}} resolves any active contact reliably). This is
+// how we recover from JN's pagination dropping records (Adam West / Paul Satchwell).
+const missing = [...wantedContactIds].filter((id) => !foundIds.has(id));
+if (missing.length > 0) {
+  console.log(`   bulk scan missed ${missing.length} contact(s); fetching by jnid…`);
+  for (const id of missing) {
+    const r = await jn('/contacts', { filter: JSON.stringify({ must: [{ term: { jnid: id } }] }), size: '1' });
+    const c = (r.results ?? [])[0];
+    if (c && c.is_active !== false) { wantedContacts.push(c); foundIds.add(id); }
+  }
+  console.log(`   recovered ${foundIds.size} / ${wantedContactIds.size} after direct fetch`);
+}
 console.log(`   matched contacts: ${wantedContacts.length} (of ${wantedContactIds.size} unique referenced)`);
 
 console.log('\n4) Building unique phone -> name map (E.164 normalized)…');
