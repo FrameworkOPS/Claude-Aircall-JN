@@ -130,9 +130,10 @@ export class JobNimbusClient {
 
   /** Jobs related to a contact (the contact's jnid appears in related.id). */
   async getRelatedJobs(contactJnid: string): Promise<JnJob[]> {
-    const filter = JSON.stringify({
-      must: [{ nested: { path: 'related', query: { term: { 'related.id': contactJnid } } } }],
-    });
+    // JobNimbus rejects the {nested: {path:'related'}} filter (HTTP error / no
+    // hits). The flat term match on related.id works and returns jobs whose
+    // related[] contains the contact.
+    const filter = JSON.stringify({ must: [{ term: { 'related.id': contactJnid } }] });
     try {
       const res = await this.http.json<unknown>({ path: '/jobs', query: { filter, size: 50 } });
       return this.extractRecords<JnJob>(res);
