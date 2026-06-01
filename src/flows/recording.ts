@@ -74,14 +74,17 @@ export async function processRecording(ctx: AppContext, payload: RecordingJobPay
   // Download the recording once; reuse the buffer for each target.
   const recording = await aircall.downloadRecording(call.recording);
 
+  // JobNimbus doesn't play audio attachments inline, so include a one-click
+  // link to listen in the Aircall dashboard (already authenticated for reps).
+  const aircallLink = `https://dashboard.aircall.io/calls/${callId}`;
   const note =
     `[Aircall Recording]\n` +
     `Direction: ${call.direction}\n` +
     `Time: ${isoFromEpoch(call.started_at)}\n` +
     `Duration: ${formatDuration(call.duration)}\n` +
     `Agent: ${call.user?.name ?? 'unknown'}\n` +
-    `Aircall call ID: ${callId}\n` +
-    `(recording attached)`;
+    `\n▶ Listen in Aircall: ${aircallLink}\n` +
+    `(MP3 attached to this record for download)`;
 
   let activityId: string | null = null;
   let fileId: string | null = null;
