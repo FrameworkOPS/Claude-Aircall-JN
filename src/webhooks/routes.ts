@@ -1,9 +1,16 @@
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import type { AppContext } from '../context';
-import { AircallWebhookSchema, JobNimbusEstimateWebhookSchema, extractEstimate } from './schema';
+import {
+  AircallWebhookSchema,
+  JobNimbusEstimateWebhookSchema,
+  JobNimbusJobWebhookSchema,
+  extractEstimate,
+  extractJobContact,
+} from './schema';
 import { verifyAircall, safeEqual } from '../lib/verify';
 import type { RecordingJobPayload } from '../flows/recording';
-import type { AircallContactPayload } from '../flows/contactSync';
+import type { CallIntakePayload } from '../flows/callIntake';
+import type { AircallContactPushPayload } from '../flows/aircallContactPush';
 
 interface RawBodyRequest extends FastifyRequest {
   rawBody?: string;
@@ -74,6 +81,45 @@ export function registerWebhooks(app: FastifyInstance, ctx: AppContext): void {
     }
     return reply.code(200).send({ ok: true });
   });
+
+  // Flow B — JobNimbus "job created" automation -> push the customer's name to Aircall.
+  app.post('/webhooks/jobnimbus/job', async (req: RawBodyRequest, reply) => {
+    const provided =
+      (req.headers['x-webhook-secret'] as string | undefined) ??
+      (req.query as { secret?: string } | undefined)?.secret ??
+      '';
+    if (!safeEqual(provided, config.JOBNIMBUS_WEBHOOK_SECRET)) {
+      logger.warn('rejected unauthenticated JobNimbus job webhook');
+      return reply.code(401).send({ error: 'unauthenticated' });
+    }
+
+    const parsed = JobNimbusJobWebhookSchema.safeParse(req.body);
+    if (!parsed.success) {
+      logger.warn({ issues: parsed.error.issues }, 'invalid JobNimbus job webhook payload');
+      return reply.code(400).send({ error: 'invalid payload' });
+    }
+    await repo.saveWebhookEvent('jobnimbus', 'job.created', parsed.data, null);
+
+    const { contactJnid, phone, firstName, lastName } = extractJobContact(parsed.data);
+    if (!contactJnid && !phone) {
+      logger.warn('JobNimbus job webhook missing contact jnid and phone; ignoring');
+      return reply.code(200).send({ ok: true, ignored: 'no contact reference' });
+    }
+
+    const payload: AircallContactPushPayload = {
+      jobnimbus_contact_jnid: contactJnid ?? undefined,
+      phone: phone ?? undefined,
+      first_name: firstName ?? undefined,
+      last_name: lastName ?? undefined,
+    };
+    await repo.enqueueJob({
+      type: 'aircall_contact_push',
+      payload: payload as unknown as Record<string, unknown>,
+      maxAttempts: config.MAX_RETRIES,
+    });
+    logger.info({ contactJnid, phone_present: Boolean(phone) }, 'enqueued Aircall contact push');
+    return reply.code(200).send({ ok: true });
+  });
 }
 
 async function routeAircallEvent(
@@ -83,21 +129,34 @@ async function routeAircallEvent(
 ): Promise<void> {
   const { config, logger, repo } = ctx;
 
-  if (event === 'contact.created' || event === 'contact.updated') {
-    const contact = data as unknown as AircallContactPayload;
+  // NOTE: contact.created/updated are intentionally NOT handled. This service
+  // now WRITES Aircall contacts (Flow B), so echoing those events back into
+  // JobNimbus would create a sync loop. The Aircall webhook should only
+  // subscribe to call.created + call.ended.
+
+  const callId = data.id as number | string | undefined;
+  if (!callId) {
+    logger.debug({ event }, 'Aircall event without call id; stored only');
+    return;
+  }
+
+  // call.created -> ensure a JobNimbus contact (stub/dedup/merge) for the caller.
+  if (event === 'call.created') {
+    const payload: CallIntakePayload = {
+      call_id: callId,
+      phone: String(data.raw_digits ?? ''),
+      direction: data.direction as 'inbound' | 'outbound' | undefined,
+    };
     await repo.enqueueJob({
-      type: 'contact_sync',
-      payload: contact as unknown as Record<string, unknown>,
-      dedupeKey: `contact_sync:${contact.id}:${Date.now()}`,
+      type: 'call_intake',
+      payload: payload as unknown as Record<string, unknown>,
+      dedupeKey: `call_intake:${callId}`,
       maxAttempts: config.MAX_RETRIES,
     });
     return;
   }
 
-  const callId = data.id as number | string | undefined;
-  if (!callId) return;
-
-  // call.ended fires once call data (including the recording) is gathered.
+  // call.ended -> upload the recording to the matched contact's job/contact.
   if (event === 'call.ended') {
     const payload: RecordingJobPayload = { call_id: callId };
     await repo.enqueueJob({

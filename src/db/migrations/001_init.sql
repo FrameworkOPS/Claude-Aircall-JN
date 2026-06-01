@@ -16,7 +16,7 @@ CREATE INDEX IF NOT EXISTS idx_webhook_events_received_at ON webhook_events (rec
 -- DB-backed job queue with retry/backoff and dead-lettering.
 CREATE TABLE IF NOT EXISTS jobs (
   id           BIGSERIAL PRIMARY KEY,
-  type         TEXT        NOT NULL,           -- 'contact_sync' | 'recording' | 'estimate_shoutout'
+  type         TEXT        NOT NULL,           -- 'call_intake' | 'recording' | 'estimate_shoutout' | 'aircall_contact_push'
   payload      JSONB       NOT NULL,
   status       TEXT        NOT NULL DEFAULT 'pending', -- pending|processing|done|dead
   attempts     INT         NOT NULL DEFAULT 0,

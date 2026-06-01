@@ -115,6 +115,17 @@ export class JobNimbusClient {
     return this.http.json<JnContact>({ method: 'PUT', path: `/contacts/${jnid}`, json: body });
   }
 
+  /**
+   * Soft-delete a contact (JobNimbus has no hard delete via the public API).
+   * Used by the dedup/merge step to retire empty duplicate stubs.
+   */
+  async archiveContact(jnid: string): Promise<JnContact> {
+    return this.updateContact(jnid, {
+      is_active: false,
+      is_archived: true,
+    } as Partial<JnContact>);
+  }
+
   /** Jobs related to a contact (the contact's jnid appears in related.id). */
   async getRelatedJobs(contactJnid: string): Promise<JnJob[]> {
     const filter = JSON.stringify({

@@ -1,9 +1,10 @@
 import type { AppContext } from '../context';
 import { NotReadyError } from '../context';
 import type { Job } from '../db/repo';
-import { syncContact, type AircallContactPayload } from '../flows/contactSync';
+import { processCallIntake, type CallIntakePayload } from '../flows/callIntake';
 import { processRecording, type RecordingJobPayload } from '../flows/recording';
 import { postEstimateShoutout, type EstimateShoutoutPayload } from '../flows/estimateShoutout';
+import { pushAircallContact, type AircallContactPushPayload } from '../flows/aircallContactPush';
 
 /**
  * DB-backed polling worker. Claims one due job at a time (FOR UPDATE SKIP
@@ -83,12 +84,14 @@ export class Worker {
 
   private async dispatch(job: Job): Promise<void> {
     switch (job.type) {
-      case 'contact_sync':
-        return syncContact(this.ctx, job.payload as unknown as AircallContactPayload);
+      case 'call_intake':
+        return processCallIntake(this.ctx, job.payload as unknown as CallIntakePayload);
       case 'recording':
         return processRecording(this.ctx, job.payload as unknown as RecordingJobPayload);
       case 'estimate_shoutout':
         return postEstimateShoutout(this.ctx, job.payload as unknown as EstimateShoutoutPayload);
+      case 'aircall_contact_push':
+        return pushAircallContact(this.ctx, job.payload as unknown as AircallContactPushPayload);
       default:
         throw new Error(`unknown job type: ${job.type}`);
     }

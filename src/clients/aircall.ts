@@ -16,6 +16,13 @@ export interface AircallCall {
   number?: { id: number; digits?: string; name?: string } | null;
 }
 
+export interface AircallContact {
+  id: number;
+  first_name?: string | null;
+  last_name?: string | null;
+  phone_numbers?: Array<{ id?: number; label?: string; value: string }>;
+}
+
 /** Client for the Aircall REST API (Basic Auth). */
 export class AircallClient {
   private readonly http: HttpClient;
@@ -42,6 +49,60 @@ export class AircallClient {
   async getCall(callId: number | string): Promise<AircallCall> {
     const res = await this.http.json<{ call: AircallCall }>({ path: `/calls/${callId}` });
     return res.call;
+  }
+
+  /**
+   * Search shared Aircall contacts by phone number. NOTE: Aircall's contact
+   * search index is eventually-consistent (a just-created contact may not show
+   * for a while), so callers should not rely on this alone for dedup — we also
+   * persist a phone→contact-id map. Best-effort: returns [] on error.
+   */
+  async searchContactByPhone(e164: string): Promise<AircallContact[]> {
+    try {
+      const res = await this.http.json<{ contacts?: AircallContact[] }>({
+        path: '/contacts/search',
+        query: { phone_number: e164 },
+      });
+      return res.contacts ?? [];
+    } catch (err) {
+      this.logger.warn({ err: String(err) }, 'aircall contact search failed');
+      return [];
+    }
+  }
+
+  /** POST /contacts — create a shared contact with a single phone number. */
+  async createContact(args: {
+    firstName: string;
+    lastName: string;
+    phone: string;
+    phoneLabel?: string;
+  }): Promise<AircallContact> {
+    const res = await this.http.json<{ contact: AircallContact }>({
+      method: 'POST',
+      path: '/contacts',
+      json: {
+        first_name: args.firstName,
+        last_name: args.lastName,
+        phone_numbers: [{ label: args.phoneLabel ?? 'Other', value: args.phone }],
+      },
+    });
+    return res.contact;
+  }
+
+  /** POST /contacts/:id — update a contact's name (Aircall uses POST to update). */
+  async updateContact(
+    id: number | string,
+    args: { firstName?: string; lastName?: string },
+  ): Promise<AircallContact> {
+    const body: Record<string, unknown> = {};
+    if (args.firstName !== undefined) body.first_name = args.firstName;
+    if (args.lastName !== undefined) body.last_name = args.lastName;
+    const res = await this.http.json<{ contact: AircallContact }>({
+      method: 'POST',
+      path: `/contacts/${id}`,
+      json: body,
+    });
+    return res.contact;
   }
 
   /**

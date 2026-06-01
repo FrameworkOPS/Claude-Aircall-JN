@@ -41,20 +41,26 @@ interface TestMocks {
     recordProcessedCall: jest.Mock;
     upsertMapping: jest.Mock;
     getMappingByAircallContact: jest.Mock;
+    getMappingByPhone: jest.Mock;
     getProcessedEstimate: jest.Mock;
     recordProcessedEstimate: jest.Mock;
   };
   aircall: {
     getCall: jest.Mock;
     downloadRecording: jest.Mock;
+    searchContactByPhone: jest.Mock;
+    createContact: jest.Mock;
+    updateContact: jest.Mock;
   };
   jobnimbus: {
     findContactsByPhone: jest.Mock;
     getRelatedJobs: jest.Mock;
+    getContact: jest.Mock;
     createActivity: jest.Mock;
     uploadFile: jest.Mock;
     createContact: jest.Mock;
     updateContact: jest.Mock;
+    archiveContact: jest.Mock;
     getEstimate: jest.Mock;
   };
   slack: { enabled: boolean; postShoutout: jest.Mock };
@@ -73,6 +79,7 @@ export function buildTestCtx(overrides: Partial<Config> = {}): {
     recordProcessedCall: jest.fn().mockResolvedValue(undefined),
     upsertMapping: jest.fn().mockResolvedValue(undefined),
     getMappingByAircallContact: jest.fn().mockResolvedValue([]),
+    getMappingByPhone: jest.fn().mockResolvedValue([]),
     getProcessedEstimate: jest.fn().mockResolvedValue(null),
     recordProcessedEstimate: jest.fn().mockResolvedValue(undefined),
   };
@@ -80,15 +87,20 @@ export function buildTestCtx(overrides: Partial<Config> = {}): {
   const aircall = {
     getCall: jest.fn(),
     downloadRecording: jest.fn(),
+    searchContactByPhone: jest.fn().mockResolvedValue([]),
+    createContact: jest.fn().mockResolvedValue({ id: 555001 }),
+    updateContact: jest.fn().mockResolvedValue({ id: 555001 }),
   };
 
   const jobnimbus = {
     findContactsByPhone: jest.fn().mockResolvedValue([]),
     getRelatedJobs: jest.fn().mockResolvedValue([]),
+    getContact: jest.fn(),
     createActivity: jest.fn().mockResolvedValue({ jnid: 'act_1' }),
     uploadFile: jest.fn().mockResolvedValue({ jnid: 'file_1' }),
     createContact: jest.fn().mockResolvedValue({ jnid: 'new_contact' }),
     updateContact: jest.fn().mockResolvedValue({ jnid: 'existing' }),
+    archiveContact: jest.fn().mockResolvedValue({ jnid: 'archived' }),
     getEstimate: jest.fn(),
   };
 

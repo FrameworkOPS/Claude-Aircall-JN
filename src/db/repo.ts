@@ -1,6 +1,10 @@
 import type { Pool } from 'pg';
 
-export type JobType = 'contact_sync' | 'recording' | 'estimate_shoutout';
+export type JobType =
+  | 'call_intake'
+  | 'recording'
+  | 'estimate_shoutout'
+  | 'aircall_contact_push';
 
 export interface Job {
   id: string;
@@ -138,6 +142,17 @@ export class Repo {
       `SELECT aircall_contact_id, jobnimbus_jnid, normalized_phone
          FROM contact_map WHERE aircall_contact_id = $1`,
       [aircallContactId],
+    );
+    return rows;
+  }
+
+  /** Look up any known Aircall-contact mappings for a normalized phone (dedup). */
+  async getMappingByPhone(normalizedPhone: string): Promise<ContactMapping[]> {
+    const { rows } = await this.pool.query<ContactMapping>(
+      `SELECT aircall_contact_id, jobnimbus_jnid, normalized_phone
+         FROM contact_map WHERE normalized_phone = $1
+         ORDER BY last_synced_at DESC`,
+      [normalizedPhone],
     );
     return rows;
   }

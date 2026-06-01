@@ -1,6 +1,7 @@
 import type { AppContext } from '../context';
 import { NotReadyError } from '../context';
 import { normalizePhone, last4 } from '../lib/phone';
+import { resolveCanonicalContact } from './dedupe';
 
 export interface RecordingJobPayload {
   call_id: number | string;
@@ -25,11 +26,11 @@ function formatDuration(seconds: number | null | undefined): string {
  * 2. Fetch authoritative call metadata (recording URL, direction, agent, phone).
  * 3. If the recording isn't ready yet, defer (NotReadyError) and retry per
  *    RECORDING_POLL_SCHEDULE_MIN; give up after the schedule is exhausted.
- * 4. Match a JobNimbus contact by the external party's normalized phone.
+ * 4. Resolve the canonical JobNimbus contact by the external party's normalized
+ *    phone (reuse / create stub / safe auto-merge of duplicates).
  * 5. Resolve target(s): related job(s) preferred, contact as fallback (config).
  * 6. Upload the recording file to each target, with a short context note.
- * 7. Record processed_calls. Never create a contact from a call unless
- *    CREATE_CONTACT_FROM_CALL is on.
+ * 7. Record processed_calls.
  */
 export async function processRecording(ctx: AppContext, payload: RecordingJobPayload): Promise<void> {
   const { logger, repo, aircall, jobnimbus, config } = ctx;
@@ -57,30 +58,17 @@ export async function processRecording(ctx: AppContext, payload: RecordingJobPay
     return;
   }
 
-  const contacts = await jobnimbus.findContactsByPhone(e164);
-
-  if (contacts.length === 0) {
-    if (config.CREATE_CONTACT_FROM_CALL) {
-      const created = await jobnimbus.createContact({ mobile_phone: e164, display_name: call.raw_digits });
-      contacts.push(created);
-      log.info({ ...phoneLog, jnid: created.jnid }, 'created minimal contact from call (config-gated)');
-    } else {
-      log.warn(phoneLog, 'NO_CONTACT_MATCH: no JobNimbus contact for phone');
-      await recordOutcome(ctx, callId, e164, 'no_contact_match');
-      return;
-    }
-  }
-
-  if (contacts.length > 1) {
-    log.warn(
-      { ...phoneLog, jnids: contacts.map((c) => c.jnid) },
-      'DUPLICATE_CONFLICT: multiple contacts match phone; skipping write',
-    );
-    await recordOutcome(ctx, callId, e164, 'duplicate_conflict');
+  // Reuse / create-stub / safe auto-merge so there is exactly one target contact.
+  const { contact, outcome } = await resolveCanonicalContact(ctx, e164, {
+    createStubIfMissing: true,
+  });
+  if (!contact) {
+    log.warn(phoneLog, 'NO_CONTACT_MATCH: could not resolve or create a contact');
+    await recordOutcome(ctx, callId, e164, 'no_contact_match');
     return;
   }
+  log.info({ ...phoneLog, jnid: contact.jnid, outcome }, 'resolved JobNimbus contact for recording');
 
-  const contact = contacts[0]!;
   const targets = await resolveTargets(ctx, contact.jnid);
 
   // Download the recording once; reuse the buffer for each target.

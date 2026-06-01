@@ -57,30 +57,42 @@ describe('processRecording (Flow 2)', () => {
     expect(mocks.jobnimbus.uploadFile).not.toHaveBeenCalled();
   });
 
-  it('records NO_CONTACT_MATCH and writes nothing when no contact matches', async () => {
-    const { ctx, mocks } = buildTestCtx();
+  it('creates an Aircall stub and uploads to it when no contact matches', async () => {
+    const { ctx, mocks } = buildTestCtx({ ATTACH_TARGET: 'job' });
     mocks.aircall.getCall.mockResolvedValue(baseCall);
+    mocks.aircall.downloadRecording.mockResolvedValue({ buffer: Buffer.from('audio'), contentType: 'audio/mpeg' });
     mocks.jobnimbus.findContactsByPhone.mockResolvedValue([]);
+    mocks.jobnimbus.createContact.mockResolvedValue({ jnid: 'stub_1', first_name: 'Aircall' });
+    mocks.jobnimbus.getRelatedJobs.mockResolvedValue([]);
 
     await processRecording(ctx, { call_id: 999 });
 
-    expect(mocks.aircall.downloadRecording).not.toHaveBeenCalled();
-    expect(mocks.jobnimbus.uploadFile).not.toHaveBeenCalled();
+    expect(mocks.jobnimbus.createContact).toHaveBeenCalledWith(
+      expect.objectContaining({ first_name: 'Aircall' }),
+    );
+    expect(mocks.jobnimbus.uploadFile).toHaveBeenCalledWith(
+      expect.objectContaining({ relatedId: 'stub_1', relatedType: 'contact' }),
+    );
     expect(mocks.repo.recordProcessedCall).toHaveBeenCalledWith(
-      expect.objectContaining({ outcome: 'no_contact_match' }),
+      expect.objectContaining({ outcome: 'posted', recording_uploaded: true }),
     );
   });
 
-  it('flags DUPLICATE_CONFLICT and writes nothing when multiple contacts match', async () => {
-    const { ctx, mocks } = buildTestCtx();
+  it('safe-auto-merges duplicates: archives an empty stub, uploads to the real primary', async () => {
+    const { ctx, mocks } = buildTestCtx({ ATTACH_TARGET: 'job' });
     mocks.aircall.getCall.mockResolvedValue(baseCall);
-    mocks.jobnimbus.findContactsByPhone.mockResolvedValue([{ jnid: 'a' }, { jnid: 'b' }]);
+    mocks.aircall.downloadRecording.mockResolvedValue({ buffer: Buffer.from('audio'), contentType: 'audio/mpeg' });
+    mocks.jobnimbus.findContactsByPhone.mockResolvedValue([
+      { jnid: 'real_a', first_name: 'Real', last_name: 'Customer' },
+      { jnid: 'stub_b', first_name: 'Aircall', last_name: '+12085551234' },
+    ]);
+    mocks.jobnimbus.getRelatedJobs.mockResolvedValue([]); // neither has jobs
 
     await processRecording(ctx, { call_id: 999 });
 
-    expect(mocks.jobnimbus.uploadFile).not.toHaveBeenCalled();
-    expect(mocks.repo.recordProcessedCall).toHaveBeenCalledWith(
-      expect.objectContaining({ outcome: 'duplicate_conflict' }),
+    expect(mocks.jobnimbus.archiveContact).toHaveBeenCalledWith('stub_b');
+    expect(mocks.jobnimbus.uploadFile).toHaveBeenCalledWith(
+      expect.objectContaining({ relatedId: 'real_a', relatedType: 'contact' }),
     );
   });
 
