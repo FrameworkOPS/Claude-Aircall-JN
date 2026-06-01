@@ -70,6 +70,32 @@ export class AircallClient {
     }
   }
 
+  /**
+   * Push an Insight Card to an ongoing call. The agent's softphone displays it
+   * during the call, regardless of whether Aircall has a matching contact —
+   * which makes it the reliable way to surface CRM data (the contact sync is
+   * eventually-consistent and the UI can lag).
+   *
+   * `contents` items use Aircall's card schema:
+   *   { type: 'title'|'shortText', text, label?, link? }
+   * Payload must be < 10 KB. Best-effort — never throws (an Insight Card
+   * failure should not abort the rest of the call_intake flow).
+   */
+  async pushInsightCard(
+    callId: number | string,
+    contents: Array<Record<string, unknown>>,
+  ): Promise<void> {
+    try {
+      await this.http.json<unknown>({
+        method: 'POST',
+        path: `/calls/${callId}/insight_cards`,
+        json: { contents },
+      });
+    } catch (err) {
+      this.logger.warn({ err: String(err), callId }, 'aircall insight card push failed');
+    }
+  }
+
   /** POST /contacts — create a shared contact with a single phone number. */
   async createContact(args: {
     firstName: string;

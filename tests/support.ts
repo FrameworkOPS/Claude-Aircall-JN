@@ -55,6 +55,7 @@ interface TestMocks {
     searchContactByPhone: jest.Mock;
     createContact: jest.Mock;
     updateContact: jest.Mock;
+    pushInsightCard: jest.Mock;
   };
   jobnimbus: {
     findContactsByPhone: jest.Mock;
@@ -95,6 +96,7 @@ export function buildTestCtx(overrides: Partial<Config> = {}): {
     searchContactByPhone: jest.fn().mockResolvedValue([]),
     createContact: jest.fn().mockResolvedValue({ id: 555001 }),
     updateContact: jest.fn().mockResolvedValue({ id: 555001 }),
+    pushInsightCard: jest.fn().mockResolvedValue(undefined),
   };
 
   const jobnimbus = {

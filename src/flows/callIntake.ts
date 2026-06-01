@@ -1,6 +1,7 @@
 import type { AppContext } from '../context';
+import type { JnContact } from '../clients/jobnimbus';
 import { normalizePhone, last4 } from '../lib/phone';
-import { resolveCanonicalContact } from './dedupe';
+import { resolveCanonicalContact, isStub } from './dedupe';
 
 export interface CallIntakePayload {
   call_id: number | string;
@@ -35,4 +36,62 @@ export async function processCallIntake(ctx: AppContext, payload: CallIntakePayl
     { phone_last4: last4(e164), direction: payload.direction, outcome, jnid: contact?.jnid },
     'call intake resolved JobNimbus contact',
   );
+
+  // Push an Insight Card so the agent's softphone shows who's calling, even if
+  // Aircall's contact sync is stale. Best-effort; failure is logged + swallowed.
+  if (contact) {
+    await pushCallerCard(ctx, payload.call_id, contact, e164);
+  }
+}
+
+async function pushCallerCard(
+  ctx: AppContext,
+  callId: number | string,
+  contact: JnContact,
+  e164: string,
+): Promise<void> {
+  const { aircall, jobnimbus, logger } = ctx;
+
+  const first = String(contact.first_name ?? '').trim();
+  const last = String(contact.last_name ?? '').trim();
+  const display = (contact.display_name as string | undefined)?.trim() || `${first} ${last}`.trim();
+  const stub = isStub(contact);
+  const contactLink = `https://app.jobnimbus.com/contact/${contact.jnid}`;
+
+  const contents: Array<Record<string, unknown>> = [
+    {
+      type: 'title',
+      text: stub
+        ? `New caller · ${e164}`
+        : display || `Unknown · ${last4(e164)}`,
+      link: contactLink,
+    },
+  ];
+
+  // If JobNimbus has jobs for this contact, include the most recent as a click-through.
+  try {
+    const jobs = await jobnimbus.getRelatedJobs(contact.jnid);
+    if (jobs.length > 0) {
+      const j = jobs[0]!;
+      contents.push({
+        type: 'shortText',
+        label: jobs.length > 1 ? `Job (${jobs.length} total)` : 'Job',
+        text: String(j.name ?? j.display_name ?? 'Open job'),
+        link: `https://app.jobnimbus.com/job/${j.jnid}`,
+      });
+    }
+  } catch (err) {
+    logger.warn({ err: String(err) }, 'failed to load related jobs for insight card');
+  }
+
+  if (stub) {
+    contents.push({
+      type: 'shortText',
+      label: 'Status',
+      text: 'Not yet in JobNimbus — stub created. Open to add real name.',
+      link: contactLink,
+    });
+  }
+
+  await aircall.pushInsightCard(callId, contents);
 }
