@@ -5,7 +5,7 @@
     "dockerfilePath": "Dockerfile"
   },
   "deploy": {
-    "startCommand": "node dist/db/migrate.js && node dist/index.js",
+    "startCommand": "node dist/db/migrate.js; echo \"[boot] migrate exited code=$?\"; node dist/index.js",
     "healthcheckPath": "/health",
     "healthcheckTimeout": 300,
     "restartPolicyType": "ON_FAILURE",
