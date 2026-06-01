@@ -20,6 +20,9 @@ import { closePool } from '../dist/db/pool.js';
 import { normalizePhone, last4 } from '../dist/lib/phone.js';
 
 const LIVE = process.argv.includes('--live');
+// --all-contacts: source from every active JN contact (1290+), not just those
+// who are primary on an active job (~635). Useful for a deeper backfill.
+const ALL_CONTACTS = process.argv.includes('--all-contacts');
 const STUB = 'aircall';
 const PHONE_FIELDS = ['mobile_phone', 'home_phone', 'work_phone'];
 
@@ -55,57 +58,82 @@ async function paginate(path, params = {}) {
 }
 
 console.log(`MODE: ${LIVE ? '🔴 LIVE WRITES' : '🟢 DRY RUN (no Aircall writes)'}`);
+console.log(`SOURCE: ${ALL_CONTACTS ? 'every active JN contact' : "primary contacts of active jobs"}`);
 console.log(`Phone region: ${config.DEFAULT_PHONE_REGION}\n`);
 
-console.log('1) Pulling all active JobNimbus jobs…');
-const jobs = await paginate('/jobs', { filter: JSON.stringify({ must: [{ term: { is_active: true } }] }) });
-console.log(`   active jobs: ${jobs.length}`);
+let wantedContacts = [];
 
-console.log('\n2) Collecting unique primary contact jnids from jobs…');
-const wantedContactIds = new Set();
-let jobsWithNoPrimary = 0;
-for (const j of jobs) {
-  const id = j.primary?.id;
-  if (id) wantedContactIds.add(id);
-  else jobsWithNoPrimary++;
-}
-console.log(`   unique contact jnids: ${wantedContactIds.size}  (jobs missing primary: ${jobsWithNoPrimary})`);
-
-console.log('\n3) Scanning JN contacts to pull those primaries (one pass, paginated)…');
-const wantedContacts = [];
-const foundIds = new Set();
-let scannedContacts = 0;
-let from = 0;
-// JN's /contacts pagination drops a few records at size=100; size=200 is reliable.
-const size = 200;
-while (foundIds.size < wantedContactIds.size) {
-  const res = await jn('/contacts', { size: String(size), from: String(from) });
-  const recs = res.results ?? [];
-  if (recs.length === 0) break;
-  scannedContacts += recs.length;
-  for (const c of recs) if (wantedContactIds.has(c.jnid) && c.is_active !== false) {
-    if (!foundIds.has(c.jnid)) { wantedContacts.push(c); foundIds.add(c.jnid); }
+if (ALL_CONTACTS) {
+  console.log('1) Pulling every active JobNimbus contact (paginated)…');
+  // size=200 is reliable; size=100 silently drops a handful (seen 1287/1290).
+  let from = 0;
+  const size = 200;
+  const seen = new Set();
+  while (true) {
+    const res = await jn('/contacts', { size: String(size), from: String(from) });
+    const recs = res.results ?? [];
+    if (recs.length === 0) break;
+    for (const c of recs) {
+      if (!seen.has(c.jnid) && c.is_active !== false) {
+        seen.add(c.jnid);
+        wantedContacts.push(c);
+      }
+    }
+    process.stdout.write(`   loaded ${wantedContacts.length}\r`);
+    if (recs.length < size) break;
+    from += size;
   }
-  process.stdout.write(`   scanned ${scannedContacts}, matched ${foundIds.size}/${wantedContactIds.size}\r`);
-  if (recs.length < size) break;
-  from += size;
-}
-process.stdout.write('\n');
+  process.stdout.write('\n');
+  console.log(`   active contacts: ${wantedContacts.length}`);
+} else {
+  console.log('1) Pulling all active JobNimbus jobs…');
+  const jobs = await paginate('/jobs', { filter: JSON.stringify({ must: [{ term: { is_active: true } }] }) });
+  console.log(`   active jobs: ${jobs.length}`);
 
-// Backstop: any wanted jnid the bulk scan missed -> fetch directly by jnid filter
-// (we've confirmed {term:{jnid}} resolves any active contact reliably). This is
-// how we recover from JN's pagination dropping records (Adam West / Paul Satchwell).
-const missing = [...wantedContactIds].filter((id) => !foundIds.has(id));
-if (missing.length > 0) {
-  console.log(`   bulk scan missed ${missing.length} contact(s); fetching by jnid…`);
-  for (const id of missing) {
-    const r = await jn('/contacts', { filter: JSON.stringify({ must: [{ term: { jnid: id } }] }), size: '1' });
-    const c = (r.results ?? [])[0];
-    if (c && c.is_active !== false) { wantedContacts.push(c); foundIds.add(id); }
+  console.log('\n2) Collecting unique primary contact jnids from jobs…');
+  const wantedContactIds = new Set();
+  let jobsWithNoPrimary = 0;
+  for (const j of jobs) {
+    const id = j.primary?.id;
+    if (id) wantedContactIds.add(id);
+    else jobsWithNoPrimary++;
   }
-  console.log(`   recovered ${foundIds.size} / ${wantedContactIds.size} after direct fetch`);
+  console.log(`   unique contact jnids: ${wantedContactIds.size}  (jobs missing primary: ${jobsWithNoPrimary})`);
+
+  console.log('\n3) Scanning JN contacts to pull those primaries (one pass, paginated)…');
+  const foundIds = new Set();
+  let scannedContacts = 0;
+  let from = 0;
+  const size = 200;
+  while (foundIds.size < wantedContactIds.size) {
+    const res = await jn('/contacts', { size: String(size), from: String(from) });
+    const recs = res.results ?? [];
+    if (recs.length === 0) break;
+    scannedContacts += recs.length;
+    for (const c of recs) if (wantedContactIds.has(c.jnid) && c.is_active !== false) {
+      if (!foundIds.has(c.jnid)) { wantedContacts.push(c); foundIds.add(c.jnid); }
+    }
+    process.stdout.write(`   scanned ${scannedContacts}, matched ${foundIds.size}/${wantedContactIds.size}\r`);
+    if (recs.length < size) break;
+    from += size;
+  }
+  process.stdout.write('\n');
+
+  // Backstop: any wanted jnid the bulk scan missed -> fetch directly by jnid filter.
+  // JN's /contacts pagination silently drops a few records, so we re-fetch any
+  // wanted contact that didn't appear (recovers e.g. Adam West / Paul Satchwell).
+  const missing = [...wantedContactIds].filter((id) => !foundIds.has(id));
+  if (missing.length > 0) {
+    console.log(`   bulk scan missed ${missing.length} contact(s); fetching by jnid…`);
+    for (const id of missing) {
+      const r = await jn('/contacts', { filter: JSON.stringify({ must: [{ term: { jnid: id } }] }), size: '1' });
+      const c = (r.results ?? [])[0];
+      if (c && c.is_active !== false) { wantedContacts.push(c); foundIds.add(id); }
+    }
+    console.log(`   recovered ${foundIds.size} / ${wantedContactIds.size} after direct fetch`);
+  }
+  console.log(`   matched contacts: ${wantedContacts.length} (of ${wantedContactIds.size} unique referenced)`);
 }
-console.log(`   matched contacts: ${wantedContacts.length} (of ${wantedContactIds.size} unique referenced)`);
 
 console.log('\n4) Building unique phone -> name map (E.164 normalized)…');
 const phoneMap = new Map(); // e164 -> { firstName, lastName, contactJnid }
@@ -115,6 +143,9 @@ for (const c of wantedContacts) {
   const last = String(c.last_name ?? '').trim();
   if (!first && !last) { reasons.no_name++; continue; }
   if (first.toLowerCase() === STUB) { reasons.stub_name++; continue; }
+  // Skip contacts whose last_name is a phone number (test artifacts like
+  // "Aircall +1...", "ZZ Probe +1..."). Real surnames don't start with '+'.
+  if (/^\+?\d{7,}$/.test(last)) { reasons.stub_name++; continue; }
   let foundPhone = false;
   for (const f of PHONE_FIELDS) {
     const raw = c[f];
