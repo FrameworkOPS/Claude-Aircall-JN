@@ -29,11 +29,19 @@ export async function postEstimateShoutout(
 
   const estimate = await jobnimbus.getEstimate(jnid);
 
-  const status = String(estimate.status_name ?? payload.signed_status ?? '').toLowerCase();
+  // JobNimbus represents a signed deal differently across accounts: some set
+  // date_signed, others set signature_status="Fully Signed" (with status_name
+  // "Approved"/"Invoiced"), others use esigned. Accept any of these signals,
+  // plus the configurable status list.
+  const sigStatus = String(estimate.signature_status ?? '').toLowerCase();
+  const statusName = String(estimate.status_name ?? payload.signed_status ?? '').toLowerCase();
   const isSigned =
-    config.ESTIMATE_SIGNED_STATUSES.includes(status) || Boolean(estimate.date_signed);
+    Boolean(estimate.date_signed) ||
+    estimate.esigned === true ||
+    sigStatus.includes('signed') ||
+    config.ESTIMATE_SIGNED_STATUSES.includes(statusName);
   if (!isSigned) {
-    log.info({ status }, 'estimate not in a signed state; skipping shoutout');
+    log.info({ sigStatus, statusName }, 'estimate not in a signed state; skipping shoutout');
     return;
   }
 

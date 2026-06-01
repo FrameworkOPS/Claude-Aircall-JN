@@ -28,6 +28,8 @@ export interface JnEstimate {
   jnid: string;
   total?: number;
   status_name?: string;
+  signature_status?: string;
+  esigned?: boolean;
   date_signed?: number;
   sales_rep_name?: string;
   sales_rep?: string;
