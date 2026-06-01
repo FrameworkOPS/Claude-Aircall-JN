@@ -60,6 +60,16 @@ const ConfigSchema = z.object({
   ENABLE_MERGE_ENDPOINT: bool('false'),
   MAX_RETRIES: z.coerce.number().int().positive().default(6),
 
+  // Self-hosted recording playback
+  // Secret used to HMAC-sign the per-call /recordings/:id URLs we put into
+  // JobNimbus activity notes. Must be at least 32 chars.
+  RECORDING_URL_SECRET: z.string().min(32),
+  // How long a signed playback URL stays valid (default: 7 days).
+  RECORDING_URL_TTL_HOURS: z.coerce.number().int().positive().default(168),
+  // Public origin for signed URLs (e.g. https://x.up.railway.app). Falls back
+  // to https://$RAILWAY_PUBLIC_DOMAIN at runtime when unset.
+  PUBLIC_BASE_URL: z.string().url().optional(),
+
   // Runtime
   PORT: z.coerce.number().int().positive().default(3000),
   HOST: z.string().default('0.0.0.0'),

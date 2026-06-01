@@ -26,6 +26,9 @@ export function testConfig(overrides: Partial<Config> = {}): Config {
     CREATE_CONTACT_FROM_CALL: false,
     ENABLE_MERGE_ENDPOINT: false,
     MAX_RETRIES: 6,
+    RECORDING_URL_SECRET: 'test-recording-url-secret-must-be-at-least-32-chars',
+    RECORDING_URL_TTL_HOURS: 168,
+    PUBLIC_BASE_URL: 'https://example.test',
     PORT: 3000,
     HOST: '0.0.0.0',
     LOG_LEVEL: 'silent',
@@ -48,6 +51,7 @@ interface TestMocks {
   aircall: {
     getCall: jest.Mock;
     downloadRecording: jest.Mock;
+    streamRecording: jest.Mock;
     searchContactByPhone: jest.Mock;
     createContact: jest.Mock;
     updateContact: jest.Mock;
@@ -87,6 +91,7 @@ export function buildTestCtx(overrides: Partial<Config> = {}): {
   const aircall = {
     getCall: jest.fn(),
     downloadRecording: jest.fn(),
+    streamRecording: jest.fn(),
     searchContactByPhone: jest.fn().mockResolvedValue([]),
     createContact: jest.fn().mockResolvedValue({ id: 555001 }),
     updateContact: jest.fn().mockResolvedValue({ id: 555001 }),

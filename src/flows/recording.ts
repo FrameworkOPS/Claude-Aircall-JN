@@ -2,6 +2,7 @@ import type { AppContext } from '../context';
 import { NotReadyError } from '../context';
 import { normalizePhone, last4 } from '../lib/phone';
 import { resolveCanonicalContact } from './dedupe';
+import { signRecordingUrl, publicBaseUrl } from '../lib/recordingUrl';
 
 export interface RecordingJobPayload {
   call_id: number | string;
@@ -75,16 +76,29 @@ export async function processRecording(ctx: AppContext, payload: RecordingJobPay
   const recording = await aircall.downloadRecording(call.recording);
 
   // JobNimbus doesn't play audio attachments inline, so include a one-click
-  // link to listen in the Aircall dashboard (already authenticated for reps).
-  const aircallLink = `https://dashboard.aircall.io/calls/${callId}`;
+  // signed playback URL that opens our /recordings endpoint (which streams the
+  // audio from Aircall so the browser plays it inline). Link is HMAC-signed and
+  // expires per RECORDING_URL_TTL_HOURS; no Aircall login required.
+  let playbackUrl = '';
+  try {
+    playbackUrl = signRecordingUrl({
+      baseUrl: publicBaseUrl(config),
+      callId,
+      ttlMs: config.RECORDING_URL_TTL_HOURS * 60 * 60 * 1000,
+      secret: config.RECORDING_URL_SECRET,
+    });
+  } catch (err) {
+    logger.warn({ err: String(err) }, 'could not sign recording URL; falling back to Aircall dashboard link');
+  }
+  const fallbackLink = `https://dashboard.aircall.io/calls/${callId}`;
   const note =
     `[Aircall Recording]\n` +
     `Direction: ${call.direction}\n` +
     `Time: ${isoFromEpoch(call.started_at)}\n` +
     `Duration: ${formatDuration(call.duration)}\n` +
     `Agent: ${call.user?.name ?? 'unknown'}\n` +
-    `\n▶ Listen in Aircall: ${aircallLink}\n` +
-    `(MP3 attached to this record for download)`;
+    `\n▶ Play in browser: ${playbackUrl || fallbackLink}\n` +
+    (playbackUrl ? `(MP3 also attached to this record)` : `(MP3 also attached; Aircall login required for link)`);
 
   let activityId: string | null = null;
   let fileId: string | null = null;

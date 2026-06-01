@@ -106,6 +106,36 @@ export class AircallClient {
   }
 
   /**
+   * Stream a call recording (for proxying through our playback endpoint). Same
+   * pre-signed-S3 caveat as downloadRecording: do NOT send the Aircall auth
+   * header to non-aircall.io hosts.
+   */
+  async streamRecording(url: string): Promise<{
+    statusCode: number;
+    contentType: string;
+    contentLength: string | undefined;
+    body: NodeJS.ReadableStream;
+  }> {
+    let isAircallHost = false;
+    try {
+      isAircallHost = /(^|\.)aircall\.io$/i.test(new URL(url).hostname);
+    } catch {
+      isAircallHost = false;
+    }
+    const headers = isAircallHost ? { authorization: this.authHeader } : {};
+    const res = await request(url, { method: 'GET', headers, maxRedirections: 3 });
+    return {
+      statusCode: res.statusCode,
+      contentType: String(res.headers['content-type'] ?? 'audio/mpeg'),
+      contentLength:
+        typeof res.headers['content-length'] === 'string'
+          ? (res.headers['content-length'] as string)
+          : undefined,
+      body: res.body as unknown as NodeJS.ReadableStream,
+    };
+  }
+
+  /**
    * Download a call recording. Aircall returns a PRE-SIGNED S3 URL whose auth is
    * in the query string — sending our Basic auth header makes S3 reject it
    * ("Only one auth mechanism allowed"). So only attach the Authorization header
