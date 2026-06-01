@@ -1,5 +1,7 @@
 import { readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
+import type { Pool } from 'pg';
+import type { Logger } from 'pino';
 import { loadMigrationConfig } from '../config';
 import { createLogger } from '../logger';
 import { getPool, closePool } from './pool';
@@ -7,12 +9,11 @@ import { getPool, closePool } from './pool';
 /**
  * Minimal forward-only migration runner. Applies any *.sql file in
  * ./migrations that has not been recorded in schema_migrations, in name order.
+ *
+ * Takes a pool + logger so it can be invoked in-process at web startup (sharing
+ * the app's pool, no teardown) or from the standalone CLI wrapper below.
  */
-async function migrate(): Promise<void> {
-  const config = loadMigrationConfig();
-  const logger = createLogger(config.LOG_LEVEL);
-  const pool = getPool(config);
-
+export async function runMigrations(pool: Pool, logger: Logger): Promise<void> {
   await pool.query(`
     CREATE TABLE IF NOT EXISTS schema_migrations (
       name TEXT PRIMARY KEY,
@@ -48,18 +49,29 @@ async function migrate(): Promise<void> {
     }
   }
 
-  await closePool();
   logger.info('migrations complete');
 }
 
-migrate()
-  .then(() => {
-    // Exit explicitly so the start command can proceed to the web process even
-    // if a lingering DB/SSL socket would otherwise keep the event loop alive.
-    process.exit(0);
-  })
-  .catch((err) => {
-    // eslint-disable-next-line no-console
-    console.error(err);
-    process.exit(1);
-  });
+/** Standalone CLI entrypoint: `node dist/db/migrate.js`. */
+async function main(): Promise<void> {
+  const config = loadMigrationConfig();
+  const logger = createLogger(config.LOG_LEVEL);
+  const pool = getPool(config);
+  // Don't let an idle-client error during/after teardown crash the process.
+  pool.on('error', (err) => logger.warn({ err: String(err) }, 'pg pool error (ignored)'));
+  try {
+    await runMigrations(pool, logger);
+  } finally {
+    await closePool().catch(() => undefined);
+  }
+}
+
+if (require.main === module) {
+  main()
+    .then(() => process.exit(0))
+    .catch((err) => {
+      // eslint-disable-next-line no-console
+      console.error(err);
+      process.exit(1);
+    });
+}
