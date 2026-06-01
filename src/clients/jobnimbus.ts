@@ -195,7 +195,16 @@ export class JobNimbusClient {
     return { jnid: res?.jnid ?? '' };
   }
 
+  /**
+   * Fetch one estimate. JobNimbus does NOT serve estimates at /estimates/:jnid
+   * (404) — they're only retrievable via the filtered list query.
+   */
   async getEstimate(jnid: string): Promise<JnEstimate> {
-    return this.http.json<JnEstimate>({ path: `/estimates/${jnid}` });
+    const filter = JSON.stringify({ must: [{ term: { jnid } }] });
+    const res = await this.http.json<unknown>({ path: '/estimates', query: { filter, size: 1 } });
+    const records = this.extractRecords<JnEstimate>(res);
+    const estimate = records[0];
+    if (!estimate) throw new Error(`estimate ${jnid} not found`);
+    return estimate;
   }
 }
