@@ -140,7 +140,12 @@ export class JobNimbusClient {
     }
   }
 
-  /** Create an activity/note linked to a contact or job. */
+  /**
+   * Create an activity/note linked to a contact or job. Association is set via
+   * `primary` (an object). NOTE: JobNimbus rejects a `related` ARRAY on write
+   * ("Attempt to relate to invalid document") and derives `related` from
+   * `primary` itself.
+   */
   async createActivity(args: {
     relatedId: string;
     relatedType: 'contact' | 'job';
@@ -153,7 +158,6 @@ export class JobNimbusClient {
       json: {
         note: args.note,
         record_type_name: args.recordTypeName ?? 'Note',
-        related: [{ id: args.relatedId, type: args.relatedType }],
         primary: { id: args.relatedId, type: args.relatedType },
       },
     });
@@ -162,7 +166,10 @@ export class JobNimbusClient {
 
   /**
    * Upload a file (e.g. call recording) attached to a contact or job.
-   * RISK: exact field names for /files are not fully documented — isolated here.
+   *
+   * JobNimbus is JSON-only: the file is sent base64-encoded in `data` (NOT
+   * multipart), and the association is set via `primary` (an object). A
+   * `related` array is rejected with "Attempt to relate to invalid document".
    */
   async uploadFile(args: {
     relatedId: string;
@@ -172,14 +179,17 @@ export class JobNimbusClient {
     contentType: string;
     description?: string;
   }): Promise<{ jnid: string }> {
-    const form = new FormData();
-    const blob = new Blob([args.buffer], { type: args.contentType });
-    form.append('file', blob, args.filename);
-    form.append('filename', args.filename);
-    form.append('type', args.relatedType);
-    form.append('related', JSON.stringify([{ id: args.relatedId, type: args.relatedType }]));
-    if (args.description) form.append('description', args.description);
-    const res = await this.http.uploadForm<{ jnid: string }>({ path: '/files', form });
+    const res = await this.http.json<{ jnid: string }>({
+      method: 'POST',
+      path: '/files',
+      json: {
+        filename: args.filename,
+        content_type: args.contentType,
+        data: args.buffer.toString('base64'),
+        description: args.description,
+        primary: { id: args.relatedId, type: args.relatedType },
+      },
+    });
     return { jnid: res?.jnid ?? '' };
   }
 

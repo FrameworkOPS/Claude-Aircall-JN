@@ -106,16 +106,26 @@ export class AircallClient {
   }
 
   /**
-   * Download a call recording. The recording URL lives on a different host than
-   * the API base, so this is a direct authenticated GET with light retries.
+   * Download a call recording. Aircall returns a PRE-SIGNED S3 URL whose auth is
+   * in the query string — sending our Basic auth header makes S3 reject it
+   * ("Only one auth mechanism allowed"). So only attach the Authorization header
+   * for actual Aircall API hosts; pre-signed/CDN hosts get no auth header.
    */
   async downloadRecording(url: string): Promise<{ buffer: Buffer; contentType: string }> {
+    let isAircallHost = false;
+    try {
+      isAircallHost = /(^|\.)aircall\.io$/i.test(new URL(url).hostname);
+    } catch {
+      isAircallHost = false;
+    }
+    const headers = isAircallHost ? { authorization: this.authHeader } : {};
+
     let lastErr: unknown;
     for (let attempt = 1; attempt <= 4; attempt++) {
       try {
         const res = await request(url, {
           method: 'GET',
-          headers: { authorization: this.authHeader },
+          headers,
           maxRedirections: 3,
         });
         if (res.statusCode >= 200 && res.statusCode < 300) {
