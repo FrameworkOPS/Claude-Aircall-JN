@@ -52,8 +52,14 @@ async function migrate(): Promise<void> {
   logger.info('migrations complete');
 }
 
-migrate().catch((err) => {
-  // eslint-disable-next-line no-console
-  console.error(err);
-  process.exit(1);
-});
+migrate()
+  .then(() => {
+    // Exit explicitly so the start command can proceed to the web process even
+    // if a lingering DB/SSL socket would otherwise keep the event loop alive.
+    process.exit(0);
+  })
+  .catch((err) => {
+    // eslint-disable-next-line no-console
+    console.error(err);
+    process.exit(1);
+  });
