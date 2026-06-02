@@ -29,7 +29,7 @@ export interface HttpClientOptions {
 }
 
 export interface RequestOptions {
-  method?: 'GET' | 'POST' | 'PUT';
+  method?: 'GET' | 'POST' | 'PUT' | 'DELETE';
   path: string;
   query?: Record<string, string | number | undefined>;
   json?: unknown;

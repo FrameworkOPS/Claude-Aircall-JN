@@ -96,23 +96,43 @@ export class AircallClient {
     }
   }
 
-  /** POST /contacts — create a shared contact with a single phone number. */
+  /**
+   * POST /contacts — create a shared contact.
+   *
+   * IMPORTANT: include `email` and ideally `company` whenever available.
+   * Aircall's dialer-UI name search only indexes contacts that have an email
+   * — phone+name-only contacts return from `/contacts/search?phone_number=`
+   * but never appear when a rep searches by name in the softphone. Empirically
+   * verified 2026-06-01 (Eddie Davis searchable with email; Paul Satchwell /
+   * Adam West not, until we recreated them with email).
+   */
   async createContact(args: {
     firstName: string;
     lastName: string;
     phone: string;
     phoneLabel?: string;
+    email?: string;
+    emailLabel?: string;
+    company?: string;
   }): Promise<AircallContact> {
+    const body: Record<string, unknown> = {
+      first_name: args.firstName,
+      last_name: args.lastName,
+      phone_numbers: [{ label: args.phoneLabel ?? 'Mobile', value: args.phone }],
+    };
+    if (args.email) body.emails = [{ label: args.emailLabel ?? 'Work', value: args.email }];
+    if (args.company) body.company_name = args.company;
     const res = await this.http.json<{ contact: AircallContact }>({
       method: 'POST',
       path: '/contacts',
-      json: {
-        first_name: args.firstName,
-        last_name: args.lastName,
-        phone_numbers: [{ label: args.phoneLabel ?? 'Other', value: args.phone }],
-      },
+      json: body,
     });
     return res.contact;
+  }
+
+  /** DELETE /contacts/:id — needed for the email-rewrite path (POST /contacts/:id ignores email changes). */
+  async deleteContact(id: number | string): Promise<void> {
+    await this.http.json<unknown>({ method: 'DELETE', path: `/contacts/${id}` });
   }
 
   /** POST /contacts/:id — update a contact's name (Aircall uses POST to update). */

@@ -69,6 +69,11 @@ export async function pushAircallContact(
     return;
   }
 
+  // Pull email + company too — Aircall's UI name-search index only includes
+  // contacts with an email. Phone+name only = not searchable in the softphone.
+  const email = String(contact.email ?? '').trim();
+  const company = String(contact.company_name ?? '').trim();
+
   // Reliable dedup: our own phone -> aircall_contact_id map, then best-effort search.
   const mapped = await repo.getMappingByPhone(e164);
   let aircallId: string | undefined = mapped.find((m) => m.aircall_contact_id)?.aircall_contact_id;
@@ -79,13 +84,31 @@ export async function pushAircallContact(
 
   let resultId: number | string;
   if (aircallId) {
-    const updated = await aircall.updateContact(aircallId, { firstName, lastName });
-    resultId = updated.id ?? aircallId;
-    log.info({ aircall_contact_id: String(resultId), phone_last4: last4(e164) }, 'updated Aircall contact name');
+    // POST /contacts/:id only updates names; emails/phones are silently ignored.
+    // If the JN contact has an email, we must delete+recreate so it ends up in
+    // the UI search index. Otherwise a plain name update is fine.
+    if (email) {
+      try { await aircall.deleteContact(aircallId); } catch (err) {
+        log.warn({ err: String(err), aircallId }, 'aircall delete-before-recreate failed; proceeding');
+      }
+      const created = await aircall.createContact({
+        firstName, lastName: lastName || firstName, phone: e164, email, company: company || undefined,
+      });
+      resultId = created.id;
+      log.info({ aircall_contact_id: String(resultId), phone_last4: last4(e164), search_indexable: true }, 'recreated Aircall contact with full data');
+    } else {
+      const updated = await aircall.updateContact(aircallId, { firstName, lastName });
+      resultId = updated.id ?? aircallId;
+      log.info({ aircall_contact_id: String(resultId), phone_last4: last4(e164), search_indexable: false }, 'updated Aircall contact name (no email, not UI-searchable)');
+    }
   } else {
-    const created = await aircall.createContact({ firstName, lastName: lastName || firstName, phone: e164 });
+    const created = await aircall.createContact({
+      firstName, lastName: lastName || firstName, phone: e164,
+      email: email || undefined,
+      company: company || undefined,
+    });
     resultId = created.id;
-    log.info({ aircall_contact_id: String(resultId), phone_last4: last4(e164) }, 'created Aircall contact');
+    log.info({ aircall_contact_id: String(resultId), phone_last4: last4(e164), search_indexable: Boolean(email) }, 'created Aircall contact');
   }
 
   await repo.upsertMapping({
