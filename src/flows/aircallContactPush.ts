@@ -73,6 +73,7 @@ export async function pushAircallContact(
   // contacts with an email. Phone+name only = not searchable in the softphone.
   const email = String(contact.email ?? '').trim();
   const company = String(contact.company_name ?? '').trim();
+  const information = formatJnAddress(contact);
 
   // Reliable dedup: our own phone -> aircall_contact_id map, then best-effort search.
   const mapped = await repo.getMappingByPhone(e164);
@@ -92,7 +93,8 @@ export async function pushAircallContact(
         log.warn({ err: String(err), aircallId }, 'aircall delete-before-recreate failed; proceeding');
       }
       const created = await aircall.createContact({
-        firstName, lastName: lastName || firstName, phone: e164, email, company: company || undefined,
+        firstName, lastName: lastName || firstName, phone: e164,
+        email, company: company || undefined, information: information || undefined,
       });
       resultId = created.id;
       log.info({ aircall_contact_id: String(resultId), phone_last4: last4(e164), search_indexable: true }, 'recreated Aircall contact with full data');
@@ -106,6 +108,7 @@ export async function pushAircallContact(
       firstName, lastName: lastName || firstName, phone: e164,
       email: email || undefined,
       company: company || undefined,
+      information: information || undefined,
     });
     resultId = created.id;
     log.info({ aircall_contact_id: String(resultId), phone_last4: last4(e164), search_indexable: Boolean(email) }, 'created Aircall contact');
@@ -116,4 +119,21 @@ export async function pushAircallContact(
     jobnimbus_jnid: contact.jnid,
     normalized_phone: e164,
   });
+}
+
+/**
+ * Build a single-line, human-readable address string from a JN contact's
+ * address fields. Used to populate Aircall's free-text `information` field
+ * (Aircall has no dedicated address field on contacts).
+ */
+export function formatJnAddress(contact: JnContact): string {
+  const get = (k: string): string => String((contact as Record<string, unknown>)[k] ?? '').trim();
+  const line1 = get('address_line1');
+  const line2 = get('address_line2');
+  const city = get('city');
+  const state = get('state_text');
+  const zip = get('zip');
+  const street = [line1, line2].filter(Boolean).join(' ');
+  const tail = [city, state].filter(Boolean).join(', ');
+  return [street, [tail, zip].filter(Boolean).join(' ').trim()].filter(Boolean).join(', ').trim();
 }

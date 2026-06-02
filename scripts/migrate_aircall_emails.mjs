@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /**
  * One-time migration: re-create existing Aircall contacts with full data
- * (email + company) so they become UI-searchable.
+ * (email + company + address) so they become UI-searchable AND show context.
  *
  * Aircall's softphone name-search index ONLY includes contacts that have an
  * email — our earlier backfill pushed name+phone only, so those contacts are
@@ -9,12 +9,14 @@
  * confirmed 2026-06-01.
  *
  * For each contact_map row:
- *   1. Get the JN contact (name, phone, email, company)
+ *   1. Get the JN contact (name, phone, email, company, address)
  *   2. Get the current Aircall contact
- *   3. If Aircall is missing the email AND JN has one → delete + recreate
- *   4. Update contact_map with the new aircall_contact_id
+ *   3. Decide to recreate when EITHER:
+ *      - Aircall is missing email AND JN has one (gates UI-searchability), OR
+ *      - Aircall is missing information AND JN has an address (enrichment).
+ *   4. Delete + recreate with full data; update contact_map.
  *
- * Idempotent: re-runs skip contacts that already have an email in Aircall.
+ * Idempotent: re-runs skip contacts already in good shape.
  *
  * Usage:
  *   node scripts/migrate_aircall_emails.mjs              # dry run
@@ -24,6 +26,7 @@
 import pg from 'pg';
 import { buildContext } from '../dist/app.js';
 import { closePool } from '../dist/db/pool.js';
+import { formatJnAddress } from '../dist/flows/aircallContactPush.js';
 
 const LIVE = process.argv.includes('--live');
 const ctx = buildContext();
@@ -69,7 +72,7 @@ const { rows } = await dbPool.query("select aircall_contact_id, jobnimbus_jnid, 
 console.log(`   total mappings: ${rows.length}`);
 
 console.log('\n2) Classifying (skip rows already healthy, find ones that need recreate)…');
-let needsRecreate = 0, alreadyHasEmail = 0, jnHasNoEmail = 0, aircallNotFound = 0, jnNotFound = 0;
+let needsRecreate = 0, fullyHealthy = 0, nothingToAdd = 0, aircallNotFound = 0, jnNotFound = 0;
 const work = [];
 let idx = 0;
 for (const r of rows) {
@@ -84,17 +87,31 @@ for (const r of rows) {
     else if (got.status === 404) { aircallNotFound++; continue; }
   } catch { aircallNotFound++; continue; }
 
-  if (acContact && (acContact.emails ?? []).length > 0) {
-    alreadyHasEmail++;
-    continue;
-  }
+  const acHasEmail = acContact && (acContact.emails ?? []).length > 0;
+  const acHasInfo = acContact && String(acContact.information ?? '').trim().length > 0;
 
   // JN side
   const jnRes = await jn('/contacts', { filter: JSON.stringify({ must: [{ term: { jnid: r.jobnimbus_jnid } }] }), size: '1' });
   const jnContact = (jnRes.results ?? [])[0];
   if (!jnContact) { jnNotFound++; continue; }
   const email = String(jnContact.email ?? '').trim();
-  if (!email) { jnHasNoEmail++; continue; }
+  const company = String(jnContact.company_name ?? '').trim();
+  const information = formatJnAddress(jnContact);
+
+  // Skip if Aircall already has whatever JN can provide.
+  const wouldAddEmail = email && !acHasEmail;
+  const wouldAddAddress = information && !acHasInfo;
+  if (!wouldAddEmail && !wouldAddAddress) {
+    if (acHasEmail || !email) fullyHealthy++;
+    else nothingToAdd++;
+    continue;
+  }
+
+  // Preserve any data Aircall already has that JN can't supply (e.g. someone
+  // edited the Aircall contact directly).
+  const finalEmail = email || (acContact?.emails?.[0]?.value ?? '');
+  const finalCompany = company || String(acContact?.company_name ?? '').trim();
+  const finalInformation = information || String(acContact?.information ?? '').trim();
 
   work.push({
     aircallId: r.aircall_contact_id,
@@ -102,21 +119,23 @@ for (const r of rows) {
     phone: r.normalized_phone,
     first: String(jnContact.first_name ?? '').trim(),
     last: String(jnContact.last_name ?? '').trim(),
-    email,
-    company: String(jnContact.company_name ?? '').trim(),
+    email: finalEmail,
+    company: finalCompany,
+    information: finalInformation,
+    reason: wouldAddEmail && wouldAddAddress ? 'email+address' : wouldAddEmail ? 'email' : 'address',
   });
   needsRecreate++;
 }
 process.stdout.write('\n');
-console.log(`   already searchable (has email): ${alreadyHasEmail}`);
-console.log(`   JN has no email (skip):         ${jnHasNoEmail}`);
-console.log(`   Aircall id 404 (skip):          ${aircallNotFound}`);
-console.log(`   JN contact missing (skip):      ${jnNotFound}`);
-console.log(`   needs delete+recreate:          ${needsRecreate}`);
+console.log(`   fully healthy (has all JN can give): ${fullyHealthy}`);
+console.log(`   nothing to add (JN has no email):    ${nothingToAdd}`);
+console.log(`   Aircall id 404 (skip):               ${aircallNotFound}`);
+console.log(`   JN contact missing (skip):           ${jnNotFound}`);
+console.log(`   needs delete+recreate:               ${needsRecreate}`);
 
 console.log('\nSAMPLE (first 10 that will change):');
 for (const w of work.slice(0, 10)) {
-  console.log(`   ${w.phone}  ${w.first} ${w.last}  ${w.email}  ${w.company ? '['+w.company+']' : ''}`);
+  console.log(`   ${w.phone}  ${w.first} ${w.last}  [+${w.reason}]  ${w.information ? '"'+w.information.slice(0,60)+'"' : ''}`);
 }
 
 if (!LIVE) {
@@ -139,8 +158,9 @@ for (const w of work) {
       first_name: w.first,
       last_name: w.last || w.first,
       phone_numbers: [{ label: 'Mobile', value: w.phone }],
-      emails: [{ label: 'Work', value: w.email }],
+      ...(w.email ? { emails: [{ label: 'Work', value: w.email }] } : {}),
       ...(w.company ? { company_name: w.company } : {}),
+      ...(w.information ? { information: w.information } : {}),
     });
     const newId = created.body?.contact?.id;
     if (!newId) throw new Error('no new id in response');

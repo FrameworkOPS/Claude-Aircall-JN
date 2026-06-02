@@ -114,6 +114,8 @@ export class AircallClient {
     email?: string;
     emailLabel?: string;
     company?: string;
+    /** Free-text. Aircall has no dedicated address field — we put it here. */
+    information?: string;
   }): Promise<AircallContact> {
     const body: Record<string, unknown> = {
       first_name: args.firstName,
@@ -122,6 +124,7 @@ export class AircallClient {
     };
     if (args.email) body.emails = [{ label: args.emailLabel ?? 'Work', value: args.email }];
     if (args.company) body.company_name = args.company;
+    if (args.information) body.information = args.information;
     const res = await this.http.json<{ contact: AircallContact }>({
       method: 'POST',
       path: '/contacts',
