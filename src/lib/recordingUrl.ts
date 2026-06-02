@@ -51,3 +51,45 @@ export function publicBaseUrl(config: { PUBLIC_BASE_URL?: string }, env: NodeJS.
   if (domain) return `https://${domain}`;
   throw new Error('PUBLIC_BASE_URL is not set and RAILWAY_PUBLIC_DOMAIN is not present');
 }
+
+/**
+ * Generic HMAC-signed URL signer for any public-but-private endpoint we expose
+ * (currently the contacts CSV export). Same shape as the recording URL, but
+ * namespaced by `resource` so a recording link can't be re-purposed for an
+ * export endpoint and vice versa.
+ */
+export function signResourceUrl(opts: {
+  baseUrl: string;
+  resource: string; // e.g. 'export'
+  path: string;     // e.g. '/aircall-contacts.csv'
+  ttlMs: number;
+  secret: string;
+  now?: number;
+}): string {
+  const exp = (opts.now ?? Date.now()) + opts.ttlMs;
+  const sig = createHmac('sha256', opts.secret)
+    .update(`${opts.resource}.${opts.path}.${exp}`)
+    .digest('hex');
+  const base = opts.baseUrl.replace(/\/+$/, '');
+  return `${base}${opts.path}?exp=${exp}&sig=${sig}`;
+}
+
+export function verifyResourceSig(opts: {
+  resource: string;
+  path: string;
+  exp: number;
+  sig: string;
+  secret: string;
+  now?: number;
+}): boolean {
+  if (!opts.exp || !Number.isFinite(opts.exp)) return false;
+  if (opts.exp < (opts.now ?? Date.now())) return false;
+  if (!/^[a-f0-9]+$/i.test(opts.sig)) return false;
+  const expected = createHmac('sha256', opts.secret)
+    .update(`${opts.resource}.${opts.path}.${opts.exp}`)
+    .digest('hex');
+  const a = Buffer.from(opts.sig, 'hex');
+  const b = Buffer.from(expected, 'hex');
+  if (a.length !== b.length) return false;
+  return timingSafeEqual(a, b);
+}

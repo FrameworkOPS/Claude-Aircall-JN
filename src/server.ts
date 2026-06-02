@@ -1,7 +1,8 @@
 import Fastify, { type FastifyInstance } from 'fastify';
 import type { AppContext } from './context';
 import { registerWebhooks } from './webhooks/routes';
-import { verifyRecordingSig } from './lib/recordingUrl';
+import { verifyRecordingSig, verifyResourceSig } from './lib/recordingUrl';
+import { streamAircallContactsCsv } from './flows/exportCsv';
 
 /**
  * Build the Fastify app. A custom JSON parser keeps the raw body around so the
@@ -65,6 +66,35 @@ export function buildServer(ctx: AppContext): FastifyInstance {
     reply.header('cache-control', 'private, no-store');
     reply.header('accept-ranges', 'none');
     return reply.send(upstream.body);
+  });
+
+  // Always-current CSV of every named JobNimbus contact with a valid phone, in
+  // Aircall's CSV import format. Designed to be downloaded then uploaded into
+  // Aircall Desktop's "Import contacts" UI (Aircall offers no programmatic
+  // bulk-import endpoint). HMAC-signed + expiring; reuses RECORDING_URL_SECRET
+  // so we don't need another env var.
+  app.get('/export/aircall-contacts.csv', async (req, reply) => {
+    const q = req.query as { exp?: string; sig?: string };
+    const ok = verifyResourceSig({
+      resource: 'export',
+      path: '/export/aircall-contacts.csv',
+      exp: Number(q.exp),
+      sig: q.sig ?? '',
+      secret: ctx.config.RECORDING_URL_SECRET,
+    });
+    if (!ok) return reply.code(401).send({ error: 'invalid or expired link' });
+
+    const stamp = new Date().toISOString().slice(0, 10);
+    reply.header('content-type', 'text/csv; charset=utf-8');
+    reply.header('content-disposition', `attachment; filename="aircall_contacts_${stamp}.csv"`);
+    reply.header('cache-control', 'private, no-store');
+
+    // Pipe each CSV line directly to the response.
+    const chunks: string[] = [];
+    const write = (line: string) => chunks.push(line + '\n');
+    const { rows, skipped } = await streamAircallContactsCsv(ctx, write);
+    ctx.logger.info({ rows, skipped }, 'served aircall-contacts.csv');
+    return reply.send(chunks.join(''));
   });
 
   registerWebhooks(app, ctx);
