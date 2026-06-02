@@ -72,48 +72,66 @@ const { rows } = await dbPool.query("select aircall_contact_id, jobnimbus_jnid, 
 console.log(`   total mappings: ${rows.length}`);
 
 console.log('\n2) Classifying (skip rows already healthy, find ones that need recreate)…');
-let needsRecreate = 0, fullyHealthy = 0, nothingToAdd = 0, aircallNotFound = 0, jnNotFound = 0;
+let fullyHealthy = 0, nothingToAdd = 0, jnNotFound = 0;
+let recreates = 0, fastInfoUpdates = 0, fromScratchCreates = 0;
 const work = [];
 let idx = 0;
 for (const r of rows) {
   idx++;
   if (idx % 50 === 0) process.stdout.write(`   classified ${idx}/${rows.length}\r`);
 
-  // Aircall side
+  // Aircall side (might be 404 if a prior pass deleted but failed to recreate)
   let acContact = null;
+  let aircallExists = false;
   try {
     const got = await ac('GET', `/contacts/${r.aircall_contact_id}`);
-    if (got.status === 200) acContact = got.body?.contact;
-    else if (got.status === 404) { aircallNotFound++; continue; }
-  } catch { aircallNotFound++; continue; }
+    if (got.status === 200) { acContact = got.body?.contact; aircallExists = true; }
+    else if (got.status === 404) aircallExists = false;
+  } catch { aircallExists = false; }
 
-  const acHasEmail = acContact && (acContact.emails ?? []).length > 0;
-  const acHasInfo = acContact && String(acContact.information ?? '').trim().length > 0;
+  const acHasEmail = aircallExists && (acContact?.emails ?? []).length > 0;
+  const acHasInfo = aircallExists && String(acContact?.information ?? '').trim().length > 0;
+  const acCompany = aircallExists ? String(acContact?.company_name ?? '').trim() : '';
 
   // JN side
   const jnRes = await jn('/contacts', { filter: JSON.stringify({ must: [{ term: { jnid: r.jobnimbus_jnid } }] }), size: '1' });
   const jnContact = (jnRes.results ?? [])[0];
   if (!jnContact) { jnNotFound++; continue; }
   const email = String(jnContact.email ?? '').trim();
-  const company = String(jnContact.company_name ?? '').trim();
+  const jnCompany = String(jnContact.company_name ?? '').trim();
   const information = formatJnAddress(jnContact);
+  // Show in the Aircall dialer list view: real JN company if present, else the
+  // address so reps see context without opening the contact detail.
+  const company = jnCompany || information;
 
-  // Skip if Aircall already has whatever JN can provide.
-  const wouldAddEmail = email && !acHasEmail;
-  const wouldAddAddress = information && !acHasInfo;
-  if (!wouldAddEmail && !wouldAddAddress) {
+  // Decide which path to take.
+  let action;
+  if (!aircallExists) {
+    // Stranded — Aircall lost the contact (failed POST in prior run). Recreate fresh.
+    action = 'create_fresh';
+    fromScratchCreates++;
+  } else if (email && !acHasEmail) {
+    // Email is missing -> only way to add it is delete + recreate.
+    action = 'recreate';
+    recreates++;
+  } else if ((information && !acHasInfo) || (company && company !== acCompany)) {
+    // Email is fine; fast-update information and/or company_name (both fields
+    // accept POST /contacts/:id updates).
+    action = 'update_info';
+    fastInfoUpdates++;
+  } else {
     if (acHasEmail || !email) fullyHealthy++;
     else nothingToAdd++;
     continue;
   }
 
-  // Preserve any data Aircall already has that JN can't supply (e.g. someone
-  // edited the Aircall contact directly).
+  // Preserve any data Aircall already has that JN can't supply.
   const finalEmail = email || (acContact?.emails?.[0]?.value ?? '');
   const finalCompany = company || String(acContact?.company_name ?? '').trim();
   const finalInformation = information || String(acContact?.information ?? '').trim();
 
   work.push({
+    action,
     aircallId: r.aircall_contact_id,
     jnid: r.jobnimbus_jnid,
     phone: r.normalized_phone,
@@ -122,20 +140,20 @@ for (const r of rows) {
     email: finalEmail,
     company: finalCompany,
     information: finalInformation,
-    reason: wouldAddEmail && wouldAddAddress ? 'email+address' : wouldAddEmail ? 'email' : 'address',
   });
-  needsRecreate++;
 }
 process.stdout.write('\n');
-console.log(`   fully healthy (has all JN can give): ${fullyHealthy}`);
-console.log(`   nothing to add (JN has no email):    ${nothingToAdd}`);
-console.log(`   Aircall id 404 (skip):               ${aircallNotFound}`);
-console.log(`   JN contact missing (skip):           ${jnNotFound}`);
-console.log(`   needs delete+recreate:               ${needsRecreate}`);
+console.log(`   fully healthy:                      ${fullyHealthy}`);
+console.log(`   no JN email + no JN address (skip): ${nothingToAdd}`);
+console.log(`   JN contact missing (skip):          ${jnNotFound}`);
+console.log(`   needs CREATE_FRESH (was 404):       ${fromScratchCreates}`);
+console.log(`   needs DELETE+RECREATE (add email):  ${recreates}`);
+console.log(`   needs FAST UPDATE_INFO (add addr):  ${fastInfoUpdates}`);
+console.log(`   total writes:                       ${work.length}`);
 
 console.log('\nSAMPLE (first 10 that will change):');
 for (const w of work.slice(0, 10)) {
-  console.log(`   ${w.phone}  ${w.first} ${w.last}  [+${w.reason}]  ${w.information ? '"'+w.information.slice(0,60)+'"' : ''}`);
+  console.log(`   [${w.action}]  ${w.phone}  ${w.first} ${w.last}  ${w.information ? '"'+w.information.slice(0,60)+'"' : '(no addr)'}`);
 }
 
 if (!LIVE) {
@@ -153,26 +171,42 @@ let n = 0;
 for (const w of work) {
   n++;
   try {
-    await ac('DELETE', `/contacts/${w.aircallId}`);
-    const created = await ac('POST', `/contacts`, {
-      first_name: w.first,
-      last_name: w.last || w.first,
-      phone_numbers: [{ label: 'Mobile', value: w.phone }],
-      ...(w.email ? { emails: [{ label: 'Work', value: w.email }] } : {}),
-      ...(w.company ? { company_name: w.company } : {}),
-      ...(w.information ? { information: w.information } : {}),
-    });
-    const newId = created.body?.contact?.id;
-    if (!newId) throw new Error('no new id in response');
-    await repo.upsertMapping({
-      aircall_contact_id: String(newId),
-      jobnimbus_jnid: w.jnid,
-      normalized_phone: w.phone,
-    });
-    ok++;
+    if (w.action === 'update_info') {
+      // Fast path: POST information and/or company_name (both accepted by
+      // POST /contacts/:id; only emails/phones are silently ignored).
+      const patch = {};
+      if (w.information) patch.information = w.information;
+      if (w.company) patch.company_name = w.company;
+      await ac('POST', `/contacts/${w.aircallId}`, patch);
+      ok++;
+    } else {
+      // create_fresh OR recreate (delete+recreate)
+      if (w.action === 'recreate') {
+        try { await ac('DELETE', `/contacts/${w.aircallId}`); } catch (e) {
+          // If DELETE fails, the old contact may still exist — surface and continue.
+          throw e;
+        }
+      }
+      const created = await ac('POST', `/contacts`, {
+        first_name: w.first,
+        last_name: w.last || w.first,
+        phone_numbers: [{ label: 'Mobile', value: w.phone }],
+        ...(w.email ? { emails: [{ label: 'Work', value: w.email }] } : {}),
+        ...(w.company ? { company_name: w.company } : {}),
+        ...(w.information ? { information: w.information } : {}),
+      });
+      const newId = created.body?.contact?.id;
+      if (!newId) throw new Error('no new id in response');
+      await repo.upsertMapping({
+        aircall_contact_id: String(newId),
+        jobnimbus_jnid: w.jnid,
+        normalized_phone: w.phone,
+      });
+      ok++;
+    }
   } catch (e) {
     fail++;
-    failures.push({ phone: w.phone, name: `${w.first} ${w.last}`, err: String(e).slice(0, 160) });
+    failures.push({ phone: w.phone, name: `${w.first} ${w.last}`, action: w.action, err: String(e).slice(0, 160) });
   }
   if (n % 10 === 0 || n === work.length) {
     const sec = ((Date.now() - t0) / 1000).toFixed(1);
@@ -180,11 +214,23 @@ for (const w of work) {
   }
 }
 process.stdout.write('\n');
+// Tidy up: each delete+recreate leaves the old contact_map row pointing at the
+// now-deleted Aircall id. Keep only the most-recent row per phone.
+if (ok > 0) {
+  const r = await dbPool.query(`
+    delete from contact_map a using contact_map b
+    where a.normalized_phone = b.normalized_phone
+      and (a.last_synced_at < b.last_synced_at
+           or (a.last_synced_at = b.last_synced_at and a.aircall_contact_id < b.aircall_contact_id))
+  `);
+  console.log(`\n  contact_map dedup: deleted ${r.rowCount} older duplicate row(s)`);
+}
+
 console.log(`\nDONE in ${((Date.now() - t0) / 60000).toFixed(1)} min`);
 console.log(`  recreated: ${ok}`);
 console.log(`  failed:    ${fail}`);
 if (failures.length) {
   console.log('\nFirst 20 failures:');
-  for (const f of failures.slice(0, 20)) console.log(`  ${f.phone}  ${f.name}  -> ${f.err}`);
+  for (const f of failures.slice(0, 20)) console.log(`  [${f.action}] ${f.phone}  ${f.name}  -> ${f.err}`);
 }
 await closePool().catch(() => {});

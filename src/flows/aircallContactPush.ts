@@ -72,8 +72,12 @@ export async function pushAircallContact(
   // Pull email + company too — Aircall's UI name-search index only includes
   // contacts with an email. Phone+name only = not searchable in the softphone.
   const email = String(contact.email ?? '').trim();
-  const company = String(contact.company_name ?? '').trim();
+  const jnCompany = String(contact.company_name ?? '').trim();
   const information = formatJnAddress(contact);
+  // Surface in the dialer list view: show the JN company if there is one
+  // (B2B customer), otherwise show the address so reps see where the call is
+  // without clicking into the contact detail (residential customers).
+  const company = jnCompany || information;
 
   // Reliable dedup: our own phone -> aircall_contact_id map, then best-effort search.
   const mapped = await repo.getMappingByPhone(e164);
