@@ -134,6 +134,43 @@ async function routeAircallEvent(
   // JobNimbus would create a sync loop. The Aircall webhook should only
   // subscribe to call.created + call.ended.
 
+  // SMS events -> log the message into the JN contact's most-recent job.
+  // Aircall fires `message.received` (inbound) and `message.sent` (outbound).
+  // `message.status_updated` is just delivery-state churn; ignore it.
+  if (event === 'message.received' || event === 'message.sent') {
+    const smsId = (data.id ?? data.sms_id) as number | string | undefined;
+    if (!smsId) {
+      logger.debug({ event }, 'Aircall SMS event without message id; stored only');
+      return;
+    }
+    const direction = event === 'message.received' ? 'inbound' : 'outbound';
+    // Aircall sends `from`/`to` as either a string or an object {value:'+1...'}.
+    const phoneOf = (v: unknown): string => {
+      if (typeof v === 'string') return v;
+      if (v && typeof v === 'object' && 'value' in v && typeof (v as { value: unknown }).value === 'string') {
+        return (v as { value: string }).value;
+      }
+      return '';
+    };
+    const payload = {
+      sms_id: smsId,
+      direction,
+      // Aircall has used both `body` and `content` historically — try both.
+      body: String(data.body ?? data.content ?? data.text ?? ''),
+      from: phoneOf(data.from),
+      to: phoneOf(data.to),
+      agent_name: (data.user as { name?: string } | undefined)?.name,
+      created_at: data.created_at as number | undefined,
+    };
+    await repo.enqueueJob({
+      type: 'sms_log',
+      payload: payload as unknown as Record<string, unknown>,
+      dedupeKey: `sms:${smsId}`,
+      maxAttempts: config.MAX_RETRIES,
+    });
+    return;
+  }
+
   const callId = data.id as number | string | undefined;
   if (!callId) {
     logger.debug({ event }, 'Aircall event without call id; stored only');

@@ -5,6 +5,7 @@ import { processCallIntake, type CallIntakePayload } from '../flows/callIntake';
 import { processRecording, type RecordingJobPayload } from '../flows/recording';
 import { postEstimateShoutout, type EstimateShoutoutPayload } from '../flows/estimateShoutout';
 import { pushAircallContact, type AircallContactPushPayload } from '../flows/aircallContactPush';
+import { logSms, type SmsLogPayload } from '../flows/smsLog';
 
 /**
  * DB-backed polling worker. Claims one due job at a time (FOR UPDATE SKIP
@@ -92,6 +93,8 @@ export class Worker {
         return postEstimateShoutout(this.ctx, job.payload as unknown as EstimateShoutoutPayload);
       case 'aircall_contact_push':
         return pushAircallContact(this.ctx, job.payload as unknown as AircallContactPushPayload);
+      case 'sms_log':
+        return logSms(this.ctx, job.payload as unknown as SmsLogPayload);
       default:
         throw new Error(`unknown job type: ${job.type}`);
     }

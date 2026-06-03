@@ -4,7 +4,8 @@ export type JobType =
   | 'call_intake'
   | 'recording'
   | 'estimate_shoutout'
-  | 'aircall_contact_push';
+  | 'aircall_contact_push'
+  | 'sms_log';
 
 export interface Job {
   id: string;
