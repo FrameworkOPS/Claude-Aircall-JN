@@ -1,6 +1,7 @@
 import type { AppContext } from '../context';
 import { normalizePhone, last4 } from '../lib/phone';
 import { resolveCanonicalContact } from './dedupe';
+import { resolveAttachTargets } from './attachTargets';
 
 /**
  * Flow D — log every Aircall SMS to JobNimbus.
@@ -54,18 +55,9 @@ export async function logSms(ctx: AppContext, payload: SmsLogPayload): Promise<v
     return;
   }
 
-  // Pick the right target: most-recent related job if any, else the contact.
-  let targetId = contact.jnid;
-  let targetType: 'contact' | 'job' = 'contact';
-  try {
-    const jobs = await jobnimbus.getRelatedJobs(contact.jnid);
-    if (jobs.length > 0) {
-      targetId = jobs[0]!.jnid;
-      targetType = 'job';
-    }
-  } catch (err) {
-    log.warn({ err: String(err) }, 'related jobs lookup failed; falling back to contact');
-  }
+  // Attach to the same target(s) as call recordings — driven by ATTACH_TARGET.
+  // For default 'job', that's every related job (with contact fallback when none).
+  const targets = await resolveAttachTargets(ctx, contact.jnid);
 
   const when = payload.created_at
     ? new Date(payload.created_at * 1000).toISOString()
@@ -82,14 +74,21 @@ export async function logSms(ctx: AppContext, payload: SmsLogPayload): Promise<v
     `\n` +
     `\n${body || '(empty SMS body)'}`;
 
-  await jobnimbus.createActivity({
-    relatedId: targetId,
-    relatedType: targetType,
-    note,
-  });
+  for (const t of targets) {
+    await jobnimbus.createActivity({
+      relatedId: t.id,
+      relatedType: t.type,
+      note,
+    });
+  }
 
   log.info(
-    { phone_last4: last4(e164), direction: dirLabel, target: `${targetType}:${targetId}`, body_len: body.length },
+    {
+      phone_last4: last4(e164),
+      direction: dirLabel,
+      targets: targets.map((t) => `${t.type}:${t.id}`),
+      body_len: body.length,
+    },
     'logged Aircall SMS to JobNimbus',
   );
 }

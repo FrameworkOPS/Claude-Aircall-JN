@@ -2,6 +2,7 @@ import type { AppContext } from '../context';
 import { NotReadyError } from '../context';
 import { normalizePhone, last4 } from '../lib/phone';
 import { resolveCanonicalContact } from './dedupe';
+import { resolveAttachTargets } from './attachTargets';
 import { signRecordingUrl, publicBaseUrl } from '../lib/recordingUrl';
 
 export interface RecordingJobPayload {
@@ -70,7 +71,7 @@ export async function processRecording(ctx: AppContext, payload: RecordingJobPay
   }
   log.info({ ...phoneLog, jnid: contact.jnid, outcome }, 'resolved JobNimbus contact for recording');
 
-  const targets = await resolveTargets(ctx, contact.jnid);
+  const targets = await resolveAttachTargets(ctx, contact.jnid);
 
   // Download the recording once; reuse the buffer for each target.
   const recording = await aircall.downloadRecording(call.recording);
@@ -155,27 +156,5 @@ async function recordOutcome(
   });
 }
 
-/** Decide where the recording/note land based on ATTACH_TARGET. */
-async function resolveTargets(
-  ctx: AppContext,
-  contactJnid: string,
-): Promise<Array<{ id: string; type: 'contact' | 'job' }>> {
-  const { config, jobnimbus, logger } = ctx;
-  const contactTarget = { id: contactJnid, type: 'contact' as const };
-
-  if (config.ATTACH_TARGET === 'contact') return [contactTarget];
-
-  const jobs = await jobnimbus.getRelatedJobs(contactJnid);
-  const jobTargets = jobs.map((j) => ({ id: j.jnid, type: 'job' as const }));
-
-  if (config.ATTACH_TARGET === 'both') {
-    return [contactTarget, ...jobTargets];
-  }
-
-  // ATTACH_TARGET === 'job': prefer related jobs, fall back to the contact.
-  if (jobTargets.length === 0) {
-    logger.info({ contactJnid }, 'no related jobs; falling back to contact');
-    return [contactTarget];
-  }
-  return jobTargets;
-}
+// resolveAttachTargets lives in ./attachTargets so SMS / future flows share
+// the same target-resolution rules as call recordings.

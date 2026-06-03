@@ -124,10 +124,28 @@ export function registerWebhooks(app: FastifyInstance, ctx: AppContext): void {
 
 async function routeAircallEvent(
   ctx: AppContext,
-  event: string,
+  eventRaw: string,
   data: Record<string, unknown>,
 ): Promise<void> {
   const { config, logger, repo } = ctx;
+
+  // Normalize the event string. AI Voice Agent events arrive as
+  // ai_voice_agent.started/.ended/.escalated. Map them onto the regular call
+  // lifecycle so they get the same contact-stub + recording handling. (Aircall's
+  // release notes also reference "voice_virtual_agent" — kept as aliases just in
+  // case some workspaces still use that form.)
+  const e = String(eventRaw ?? '').toLowerCase();
+  const event =
+    e === 'ai_voice_agent.started' ||
+    e === 'voice_virtual_agent.started' || e === 'voice_virtual_agent_started'
+      ? 'call.created'
+      : e === 'ai_voice_agent.ended' ||
+        e === 'voice_virtual_agent.ended' || e === 'voice_virtual_agent_ended'
+      ? 'call.ended'
+      : e === 'ai_voice_agent.escalated' ||
+        e === 'voice_virtual_agent.escalated' || e === 'voice_virtual_agent_escalated'
+      ? 'call.created' // a human is now joining; treat like a new intake
+      : e;
 
   // NOTE: contact.created/updated are intentionally NOT handled. This service
   // now WRITES Aircall contacts (Flow B), so echoing those events back into
@@ -179,10 +197,35 @@ async function routeAircallEvent(
 
   // call.created -> ensure a JobNimbus contact (stub/dedup/merge) for the caller.
   if (event === 'call.created') {
+    // Look at every place Aircall plausibly puts the external party's phone.
+    // Standard call.created uses raw_digits; AI Voice Agent and some other
+    // event variants stash it under from/to/number.
+    const dir = (data.direction as string | undefined)?.toLowerCase();
+    const phoneOf = (v: unknown): string =>
+      typeof v === 'string'
+        ? v
+        : v && typeof v === 'object' && typeof (v as { value?: unknown }).value === 'string'
+        ? (v as { value: string }).value
+        : v && typeof v === 'object' && typeof (v as { digits?: unknown }).digits === 'string'
+        ? (v as { digits: string }).digits
+        : '';
+    const candidates = [
+      data.raw_digits,
+      data.external_number,
+      data.contact && (data.contact as { phone_number?: unknown }).phone_number,
+      // For outbound, the customer is `to`; for inbound it's `from`.
+      dir === 'outbound' ? data.to : data.from,
+      data.from,
+      data.to,
+      data.number,
+      (data.number as Record<string, unknown> | undefined)?.digits,
+    ];
+    const phone = candidates.map(phoneOf).find((s) => s.replace(/\D/g, '').length >= 7) ?? '';
+
     const payload: CallIntakePayload = {
       call_id: callId,
-      phone: String(data.raw_digits ?? ''),
-      direction: data.direction as 'inbound' | 'outbound' | undefined,
+      phone,
+      direction: dir as 'inbound' | 'outbound' | undefined,
     };
     await repo.enqueueJob({
       type: 'call_intake',
